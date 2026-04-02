@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/vaclavkubon/dev/**)",
+      "Read(//Users/vaclavkubon/**)",
+      "Bash(python3 -c \"import escnn; print\\(''escnn ok''\\)\")",
+      "Bash(python3 -c \"import lerobot; print\\(''lerobot ok''\\)\")",
+      "Bash(python3 -c \"import torch; print\\(''torch'', torch.__version__\\)\")",
+      "Bash(conda env:*)",
+      "Bash(conda run:*)",
+      "Bash(git clone:*)",
+      "Read(//private/tmp/equidiff/**)",
+      "Read(//private/tmp/equidiff/equi_diffpo/**)",
+      "Bash(curl -L -A \"Mozilla/5.0\" \"https://raw.githubusercontent.com/huggingface/lerobot/main/src/lerobot/common/policies/diffusion/modeling_diffusion.py\" -o /tmp/modeling_diffusion.py)",
+      "Read(//private/tmp/**)"
+    ]
+  }
+}

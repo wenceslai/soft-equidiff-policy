@@ -3,13 +3,13 @@ Evaluation and analysis tools for SoftEquiDiffPolicy.
 
 Two main functions:
 
-1. measure_equivariance_error(model, dataset, k, n_samples)
+1. measure_equivariance_error(policy, dataset, k, n_samples)
    — For a fixed denoising step k, compute the average equivariance error:
        ||ε(g·obs, g·a^k, k) - g·ε(obs, a^k, k)||
    across random group elements g.  This should be near 0 for an exactly
    equivariant model and larger for a model that has relaxed equivariance.
 
-2. plot_equivariance_vs_step(model, dataset, steps, ...)
+2. plot_equivariance_vs_step(checkpoints, dataset, steps, ...)
    — Sweep over multiple denoising steps and plot the equivariance error curve.
    For SoftEqui-step, we expect the error to be larger at small k (near-clean)
    and smaller at large k (near-noisy).
@@ -17,14 +17,19 @@ Two main functions:
 Usage:
     python -m soft_equidiff.eval --checkpoint outputs/soft_step/policy_step0200000.pt \
                                   --n_samples 200 --device cuda
+
+    # Compare multiple runs and log to the same wandb project:
+    python -m soft_equidiff.eval \\
+        --checkpoint outputs/soft_step/policy_step0200000.pt \\
+        --wandb_project soft-equidiff-pusht --wandb_run_name eval_comparison
 """
 
 import argparse
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 from .config import SoftEquiDiffConfig
@@ -36,14 +41,10 @@ from .policy import SoftEquiDiffPolicy
 # ---------------------------------------------------------------------------
 
 def rotate_image(image: torch.Tensor, angle_rad: float) -> torch.Tensor:
-    """
-    Rotate a (*, 3, H, W) image tensor by angle_rad around the image centre.
-    Uses torchvision.transforms.functional for exact affine warping.
-    """
+    """Rotate a (*, 3, H, W) image tensor by angle_rad around the image centre."""
     import torchvision.transforms.functional as TF
     import math
     angle_deg = math.degrees(angle_rad)
-    # Handle batch dims
     orig_shape = image.shape
     img = image.reshape(-1, *orig_shape[-3:])
     rotated = torch.stack([TF.rotate(img[i], angle_deg) for i in range(img.shape[0])])
@@ -51,10 +52,7 @@ def rotate_image(image: torch.Tensor, angle_rad: float) -> torch.Tensor:
 
 
 def rotate_action(action: torch.Tensor, angle_rad: float, center: tuple = (256.0, 256.0)) -> torch.Tensor:
-    """
-    Rotate 2D (x, y) actions by angle_rad around a given centre (in pixel coords).
-    action: (*, 2)  [x, y coordinates]
-    """
+    """Rotate 2D (x, y) actions by angle_rad around a given centre."""
     import math
     cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
     cx, cy = center
@@ -86,14 +84,6 @@ def measure_equivariance_error(
     """
     Measure ||ε(g·obs, g·a^k, k) - g·ε(obs, a^k, k)|| averaged over samples and group elements.
 
-    Args:
-        policy:    trained SoftEquiDiffPolicy
-        dataset:   LeRobot dataset (iterable of dicts)
-        k:         denoising step at which to measure
-        n_samples: number of data samples to average over
-        device:    torch device
-        center:    rotation centre in pixel coordinates
-
     Returns:
         mean equivariance error (float)
     """
@@ -113,38 +103,61 @@ def measure_equivariance_error(
 
         batch = {key: val.to(device) for key, val in batch.items() if isinstance(val, torch.Tensor)}
         obs_images, obs_state, actions = policy._preprocess_batch(batch)
-        # obs_images: (1, n_obs, 3, H, W), obs_state: (1, n_obs, 2), actions: (1, H, 2)
 
-        # Sample noisy actions at step k
         noise = torch.randn_like(actions)
         timestep = torch.tensor([k], device=device)
         noisy_actions = policy.noise_scheduler.add_noise(actions, noise, timestep)
 
-        # Predict noise for original observation
         eps_orig = policy.model(obs_images, obs_state, noisy_actions, timestep)
-        # eps_orig: (1, horizon, 2)
 
         batch_errors = []
         for angle in angles[1:]:  # skip identity
-            # Rotate observation and noisy actions
-            obs_rot = rotate_image(obs_images, angle)
-            state_rot = rotate_state(obs_state, angle, center)
-            noisy_rot = rotate_action(noisy_actions, angle, center)
-
-            # Predict noise for rotated input
-            eps_rot = policy.model(obs_rot, state_rot, noisy_rot, timestep)
+            obs_rot    = rotate_image(obs_images, angle)
+            state_rot  = rotate_state(obs_state, angle, center)
+            noisy_rot  = rotate_action(noisy_actions, angle, center)
+            eps_rot    = policy.model(obs_rot, state_rot, noisy_rot, timestep)
 
             # Equivariance: ε(g·x) should equal g·ε(x)
+            # Noise lives in displacement space so rotate around origin
             eps_expected = rotate_action(eps_orig, angle, center=(0.0, 0.0))
-            # Note: noise lives in relative displacement space, so center=(0,0)
-
             err = (eps_rot - eps_expected).norm(dim=-1).mean().item()
             batch_errors.append(err)
 
-        errors.append(np.mean(batch_errors))
+        errors.append(float(np.mean(batch_errors)))
 
     return float(np.mean(errors))
 
+
+# ---------------------------------------------------------------------------
+# Free-weight norm analysis
+# ---------------------------------------------------------------------------
+
+def analyze_free_weights(policy: SoftEquiDiffPolicy) -> dict:
+    """
+    Collect ||W_free||² for every SoftEquiWrapper layer.
+
+    Returns:
+        dict mapping layer name → norm² value
+    """
+    from .model.soft_wrapper import SoftEquiWrapper
+
+    norms = {}
+    total = 0.0
+    print("\n--- Free weight norms (||W_free||²) ---")
+    for name, module in policy.model.named_modules():
+        if isinstance(module, SoftEquiWrapper):
+            norm_sq = module.free_weight_norm_sq().item()
+            norms[name] = norm_sq
+            total += norm_sq
+            print(f"  {name:<60s}  {norm_sq:.6f}")
+    norms["__total__"] = total
+    print(f"  {'TOTAL':<60s}  {total:.6f}")
+    return norms
+
+
+# ---------------------------------------------------------------------------
+# Multi-checkpoint comparison + wandb logging
+# ---------------------------------------------------------------------------
 
 def plot_equivariance_vs_step(
     checkpoints: dict,
@@ -153,17 +166,22 @@ def plot_equivariance_vs_step(
     n_samples: int = 100,
     device: str = "cpu",
     save_path: str = "equivariance_vs_step.png",
-):
+    wandb_run=None,
+) -> dict:
     """
     Plot equivariance error vs denoising step for multiple methods.
 
     Args:
-        checkpoints: {label: checkpoint_path} dict
-        dataset:     LeRobot dataset
-        steps:       list of denoising steps to evaluate (e.g. [0, 10, 25, 50, 75, 99])
-        n_samples:   samples per step
-        device:      torch device
-        save_path:   where to save the figure
+        checkpoints:  {label: checkpoint_path}
+        dataset:      LeRobot dataset
+        steps:        denoising steps to evaluate, e.g. [0, 10, 25, 50, 75, 99]
+        n_samples:    samples per step per method
+        device:       torch device string
+        save_path:    where to save the PNG
+        wandb_run:    active wandb run object (or None to skip wandb logging)
+
+    Returns:
+        {label: [error_at_step_0, error_at_step_1, ...]}
     """
     results = {}
 
@@ -181,11 +199,10 @@ def plot_equivariance_vs_step(
             print(f"  k={k:3d}: error={err:.4f}")
         results[label] = errors
 
-    # Plot
+    # --- Matplotlib figure ---
     fig, ax = plt.subplots(figsize=(8, 5))
     for label, errors in results.items():
         ax.plot(steps, errors, marker="o", label=label)
-
     ax.set_xlabel("Denoising step k  (0=clean, K=noisy)")
     ax.set_ylabel("Mean equivariance error")
     ax.set_title("Equivariance error vs denoising step")
@@ -193,28 +210,32 @@ def plot_equivariance_vs_step(
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
-    print(f"Saved: {save_path}")
+    print(f"Saved figure: {save_path}")
+
+    # --- Wandb logging ---
+    if wandb_run is not None:
+        import wandb
+
+        # Log the figure as an image
+        wandb_run.log({"eval/equivariance_vs_step": wandb.Image(save_path)})
+
+        # Log as a wandb Table so the interactive line chart works too
+        columns = ["method", "step_k", "equivariance_error"]
+        table = wandb.Table(columns=columns)
+        for label, errors in results.items():
+            for k, err in zip(steps, errors):
+                table.add_data(label, k, err)
+        wandb_run.log({"eval/equivariance_table": table})
+
+        # Also log per-step errors as separate series (one metric per method)
+        # so wandb's line chart can group them automatically
+        for label, errors in results.items():
+            safe_label = label.replace(" ", "_").replace("-", "_")
+            for k, err in zip(steps, errors):
+                wandb_run.log({f"eval/equi_error/{safe_label}": err, "eval/step_k": k})
+
     plt.close(fig)
-
     return results
-
-
-# ---------------------------------------------------------------------------
-# Free-weight norm analysis (how much symmetry is broken per layer)
-# ---------------------------------------------------------------------------
-
-def analyze_free_weights(policy: SoftEquiDiffPolicy):
-    """Print the free weight norm² for each SoftEquiWrapper in the model."""
-    from .model.soft_wrapper import SoftEquiWrapper
-
-    print("\n--- Free weight norms (||W_free||²) ---")
-    total = 0.0
-    for name, module in policy.model.named_modules():
-        if isinstance(module, SoftEquiWrapper):
-            norm_sq = module.free_weight_norm_sq().item()
-            total += norm_sq
-            print(f"  {name:<60s}  {norm_sq:.6f}")
-    print(f"  {'TOTAL':<60s}  {total:.6f}")
 
 
 # ---------------------------------------------------------------------------
@@ -223,21 +244,66 @@ def analyze_free_weights(policy: SoftEquiDiffPolicy):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint", required=True, help="Path to .pt checkpoint")
+    p.add_argument("--checkpoint", required=True,
+                   help="Path to .pt checkpoint (or comma-separated list for comparison)")
+    p.add_argument("--labels", default=None,
+                   help="Comma-separated labels matching --checkpoint order")
     p.add_argument("--device", default="cpu")
     p.add_argument("--n_samples", type=int, default=100)
     p.add_argument("--steps", nargs="+", type=int, default=[0, 10, 25, 50, 75, 99])
     p.add_argument("--save_dir", default=".")
+
+    # Wandb
+    p.add_argument("--wandb_project", default="soft-equidiff-pusht")
+    p.add_argument("--wandb_entity", default=None)
+    p.add_argument("--wandb_run_name", default="eval")
+    p.add_argument("--no_wandb", action="store_true")
+
     return p.parse_args()
 
 
 def main():
     args = parse_args()
     device = torch.device(args.device)
+    save_dir = Path(args.save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
 
-    ckpt = torch.load(args.checkpoint, map_location=device)
-    config = ckpt["config"]
+    # Support comma-separated list of checkpoints for multi-run comparison
+    ckpt_paths = [p.strip() for p in args.checkpoint.split(",")]
+    if args.labels:
+        labels = [l.strip() for l in args.labels.split(",")]
+    else:
+        labels = [Path(p).parent.name for p in ckpt_paths]  # use parent dir name as label
+    checkpoints = dict(zip(labels, ckpt_paths))
 
+    # Load first checkpoint's config for dataset setup
+    first_ckpt = torch.load(ckpt_paths[0], map_location=device)
+    config = first_ckpt["config"]
+
+    # --- Wandb init ---
+    use_wandb = not args.no_wandb
+    wandb_run = None
+    if use_wandb:
+        try:
+            import wandb
+            wandb_run = wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=args.wandb_run_name,
+                job_type="eval",
+                config={
+                    "checkpoints": ckpt_paths,
+                    "labels": labels,
+                    "n_samples": args.n_samples,
+                    "steps": args.steps,
+                    "device": str(device),
+                },
+            )
+        except ImportError:
+            print("wandb not installed — skipping wandb logging.")
+            use_wandb = False
+
+    # Load dataset
     try:
         from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
         dataset = LeRobotDataset(
@@ -251,16 +317,46 @@ def main():
     except ImportError:
         raise ImportError("LeRobot required for evaluation. See requirements.txt.")
 
-    # Build policy
+    # --- Free weight norms (single checkpoint) ---
     policy = SoftEquiDiffPolicy(config).to(device)
-    policy.load_state_dict(ckpt["model_state_dict"])
+    policy.load_state_dict(first_ckpt["model_state_dict"])
+    free_norms = analyze_free_weights(policy)
 
-    analyze_free_weights(policy)
+    if wandb_run is not None:
+        import wandb
 
+        # Log as a bar-chart table
+        norm_table = wandb.Table(columns=["layer", "free_weight_norm_sq"])
+        for layer_name, norm_sq in free_norms.items():
+            if layer_name != "__total__":
+                norm_table.add_data(layer_name, norm_sq)
+        wandb_run.log({
+            "eval/free_weight_norms": norm_table,
+            "eval/total_free_weight_norm_sq": free_norms["__total__"],
+        })
+
+    # --- Equivariance vs step ---
     print(f"\nMeasuring equivariance error at steps: {args.steps}")
-    for k in args.steps:
-        err = measure_equivariance_error(policy, dataset, k, args.n_samples, str(device))
-        print(f"  k={k:3d}: error={err:.4f}")
+    results = plot_equivariance_vs_step(
+        checkpoints=checkpoints,
+        dataset=dataset,
+        steps=args.steps,
+        n_samples=args.n_samples,
+        device=str(device),
+        save_path=str(save_dir / "equivariance_vs_step.png"),
+        wandb_run=wandb_run,
+    )
+
+    # Also print a clean summary table
+    print("\n--- Equivariance error summary ---")
+    header = f"{'step':>6}" + "".join(f"  {lab:>20}" for lab in results.keys())
+    print(header)
+    for i, k in enumerate(args.steps):
+        row = f"{k:>6}" + "".join(f"  {errs[i]:>20.4f}" for errs in results.values())
+        print(row)
+
+    if wandb_run is not None:
+        wandb_run.finish()
 
 
 if __name__ == "__main__":

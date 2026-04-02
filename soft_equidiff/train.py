@@ -16,12 +16,14 @@ Usage:
     # With camera tilt:
     python -m soft_equidiff.train --tilt_degrees 30 --run_name soft_step_tilt30
 
+    # Disable wandb:
+    python -m soft_equidiff.train --no_wandb
+
 Requires:
-    pip install lerobot escnn einops diffusers torch
+    pip install lerobot escnn einops diffusers torch wandb
 """
 
 import argparse
-import os
 import time
 from pathlib import Path
 
@@ -45,8 +47,8 @@ def parse_args():
     p.add_argument("--lambda_power", type=float, default=1.0)
 
     # Which layers to soften
-    p.add_argument("--no_soften_image", action="store_true") # image encoder
-    p.add_argument("--no_soften_state", action="store_true") # proprio encoder actions and proprio have the same format (x, y)
+    p.add_argument("--no_soften_image", action="store_true")  # image encoder
+    p.add_argument("--no_soften_state", action="store_true")  # proprio encoder (x, y)
     p.add_argument("--no_soften_action", action="store_true") # action encoder
     p.add_argument("--no_soften_decoder", action="store_true") # noise decoder
 
@@ -62,8 +64,13 @@ def parse_args():
 
     # Architecture
     p.add_argument("--N", type=int, default=8, help="C_N group order")
-    p.add_argument("--n_hidden", type=int, default=64) # number of features per group element
+    p.add_argument("--n_hidden", type=int, default=64)  # features per group element
     p.add_argument("--n_obs_steps", type=int, default=2)
+
+    # Wandb
+    p.add_argument("--wandb_project", default="soft-equidiff-pusht")
+    p.add_argument("--wandb_entity", default=None, help="wandb team/username (optional)")
+    p.add_argument("--no_wandb", action="store_true", help="disable wandb logging")
 
     return p.parse_args()
 
@@ -88,7 +95,6 @@ def build_dataset(config: SoftEquiDiffConfig, tilt_transform=None):
         image_transforms=tilt_transform,
     )
 
-    # Build normaliser stats from dataset
     stats = {
         "observation.state": {
             "min": dataset.meta.stats["observation.state"]["min"],
@@ -101,6 +107,15 @@ def build_dataset(config: SoftEquiDiffConfig, tilt_transform=None):
     }
 
     return dataset, stats
+
+
+def _grad_norm(policy):
+    """Compute total gradient L2 norm across all parameters."""
+    total = 0.0
+    for p in policy.parameters():
+        if p.grad is not None:
+            total += p.grad.detach().norm().item() ** 2
+    return total ** 0.5
 
 
 def train(args):
@@ -126,7 +141,42 @@ def train(args):
         camera_tilt_degrees=args.tilt_degrees,
     )
 
-    # Camera tilt transform (applied to images in the dataset)
+    # --- Wandb init ---
+    use_wandb = not args.no_wandb
+    if use_wandb:
+        try:
+            import wandb
+            wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=args.run_name,
+                config={
+                    "penalty_mode": config.penalty_mode,
+                    "lambda_base": config.lambda_base,
+                    "lambda_power": config.lambda_power,
+                    "N": config.n_rotations,
+                    "enc_n_hidden": config.enc_n_hidden,
+                    "state_features": config.state_features,
+                    "action_features": config.action_features,
+                    "n_obs_steps": config.n_obs_steps,
+                    "horizon": config.horizon,
+                    "num_diffusion_steps": config.num_diffusion_steps,
+                    "soften_image": config.soften_image_encoder,
+                    "soften_state": config.soften_state_encoder,
+                    "soften_action": config.soften_action_encoder,
+                    "soften_decoder": config.soften_decoder,
+                    "tilt_degrees": config.camera_tilt_degrees,
+                    "lr": config.lr,
+                    "batch_size": config.batch_size,
+                    "unet_down_dims": config.unet_down_dims,
+                },
+                dir=str(out_dir),
+            )
+        except ImportError:
+            print("wandb not installed — run `pip install wandb` to enable logging. Continuing without it.")
+            use_wandb = False
+
+    # Camera tilt transform
     tilt_transform = make_tilt_transform(args.tilt_degrees) if args.tilt_degrees > 0 else None
 
     print(f"Loading dataset: {config.dataset_repo_id}")
@@ -134,6 +184,14 @@ def train(args):
 
     policy = SoftEquiDiffPolicy(config, dataset_stats=stats).to(device)
     optimizer = torch.optim.AdamW(policy.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+
+    n_params = sum(p.numel() for p in policy.parameters())
+    print(f"Starting training: {args.run_name}")
+    print(f"  Mode: {config.penalty_mode}, λ={config.lambda_base}, tilt={config.camera_tilt_degrees}°")
+    print(f"  Parameters: {n_params:,}")
+
+    if use_wandb:
+        wandb.summary["n_params"] = n_params
 
     dataloader = DataLoader(
         dataset,
@@ -143,15 +201,11 @@ def train(args):
         pin_memory=True,
         drop_last=True,
     )
-    data_iter = iter(dataloader) # 
-
-    print(f"Starting training: {args.run_name}")
-    print(f"  Mode: {config.penalty_mode}, λ={config.lambda_base}, tilt={config.camera_tilt_degrees}°")
-    n_params = sum(p.numel() for p in policy.parameters())
-    print(f"  Parameters: {n_params:,}")
+    data_iter = iter(dataloader)
 
     policy.train()
     t0 = time.time()
+    step_t0 = t0
 
     for step in range(1, config.num_train_steps + 1):
         try:
@@ -164,20 +218,37 @@ def train(args):
 
         optimizer.zero_grad()
         losses = policy(batch)
-        loss = losses["loss"]
-        loss.backward()
+        losses["loss"].backward()
+
+        grad_norm = _grad_norm(policy)
         torch.nn.utils.clip_grad_norm_(policy.parameters(), config.grad_clip_norm)
         optimizer.step()
 
         if step % args.log_every == 0:
             elapsed = time.time() - t0
+            steps_per_sec = args.log_every / (time.time() - step_t0)
+            step_t0 = time.time()
+
             print(
                 f"step {step:>7d} | loss {losses['loss'].item():.4f} "
                 f"| mse {losses['mse_loss'].item():.4f} "
                 f"| equi {losses['equi_penalty'].item():.4f} "
                 f"| λ {losses['lambda'].item():.4f} "
-                f"| {elapsed:.0f}s"
+                f"| grad {grad_norm:.3f} "
+                f"| {steps_per_sec:.1f} s/s "
+                f"| {elapsed:.0f}s elapsed"
             )
+
+            if use_wandb:
+                wandb.log({
+                    "train/loss":         losses["loss"].item(),
+                    "train/mse_loss":     losses["mse_loss"].item(),
+                    "train/equi_penalty": losses["equi_penalty"].item(),
+                    "train/lambda":       losses["lambda"].item(),
+                    "train/grad_norm":    grad_norm,
+                    "train/steps_per_sec": steps_per_sec,
+                    "train/elapsed_sec":  elapsed,
+                }, step=step)
 
         if step % args.save_every == 0 or step == config.num_train_steps:
             ckpt_path = out_dir / f"policy_step{step:07d}.pt"
@@ -188,6 +259,18 @@ def train(args):
                 "config": config,
             }, ckpt_path)
             print(f"Saved checkpoint: {ckpt_path}")
+
+            if use_wandb:
+                artifact = wandb.Artifact(
+                    name=f"{args.run_name}-checkpoint",
+                    type="model",
+                    metadata={"step": step},
+                )
+                artifact.add_file(str(ckpt_path))
+                wandb.log_artifact(artifact)
+
+    if use_wandb:
+        wandb.finish()
 
     print("Training complete.")
 
