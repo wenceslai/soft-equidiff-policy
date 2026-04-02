@@ -1,0 +1,28 @@
+# Core deep learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Equivariant neural networks
+# Install: pip install escnn
+# Note: escnn requires gfortran on Linux: sudo apt install -y gfortran
+escnn>=0.1.9
+
+# Tensor manipulation
+einops>=0.6.0
+
+# Diffusion scheduler (DDPM)
+diffusers>=0.18.0
+
+# Standard scientific stack
+numpy>=1.24.0
+matplotlib>=3.7.0
+
+# --- LeRobot (must be installed from source) ---
+# git clone https://github.com/huggingface/lerobot.git
+# cd lerobot && pip install -e .
+#
+# Push-T dataset will be auto-downloaded by LeRobot on first use.
+
+# --- EquiDiff (reference only, not a hard dependency) ---
+# git clone https://github.com/pointW/equidiff.git
+# cd equidiff && pip install -e .
