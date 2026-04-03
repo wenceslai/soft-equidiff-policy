@@ -305,7 +305,10 @@ def main():
 
     # Load dataset
     try:
-        from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+        try:
+            from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+        except ImportError:
+            from lerobot.datasets.lerobot_dataset import LeRobotDataset
         dataset = LeRobotDataset(
             config.dataset_repo_id,
             delta_timestamps={

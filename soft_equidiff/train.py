@@ -78,7 +78,10 @@ def parse_args():
 def build_dataset(config: SoftEquiDiffConfig, tilt_transform=None):
     """Load LeRobot Push-T dataset."""
     try:
-        from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+        try:
+            from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+        except ImportError:
+            from lerobot.datasets.lerobot_dataset import LeRobotDataset
     except ImportError:
         raise ImportError(
             "LeRobot not found. Install with:\n"
