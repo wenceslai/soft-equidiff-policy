@@ -33,7 +33,7 @@ class EquiDecoder(nn.Module):
         self.gs0 = gspaces.no_base_space(group)
 
         # in_fields * regular_repr → 1 * irrep(1)  (2D action vector)
-        self.in_type = enn.FieldType(self.gs0, in_fields * [self.gs0.fibergroup.regular_repr])
+        self.in_type = enn.FieldType(self.gs0, in_fields * [self.gs0.regular_repr])
         self.out_type = enn.FieldType(self.gs0, [self.gs0.fibergroup.irrep(1)])
 
         linear = enn.Linear(self.in_type, self.out_type)

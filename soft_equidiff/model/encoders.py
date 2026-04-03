@@ -251,7 +251,7 @@ class EquiStateEncoder(nn.Module):
         self.gs0 = gspaces.no_base_space(group)
 
         self.in_type = enn.FieldType(self.gs0, [self.gs0.fibergroup.irrep(1)])
-        self.out_type = enn.FieldType(self.gs0, out_fields * [self.gs0.fibergroup.regular_repr])
+        self.out_type = enn.FieldType(self.gs0, out_fields * [self.gs0.regular_repr])
 
         linear = enn.Linear(self.in_type, self.out_type)
         if soften:
@@ -298,7 +298,7 @@ class EquiActionEncoder(nn.Module):
         self.gs0 = gspaces.no_base_space(group)
 
         self.in_type = enn.FieldType(self.gs0, [self.gs0.fibergroup.irrep(1)])
-        self.out_type = enn.FieldType(self.gs0, out_fields * [self.gs0.fibergroup.regular_repr])
+        self.out_type = enn.FieldType(self.gs0, out_fields * [self.gs0.regular_repr])
 
         linear = enn.Linear(self.in_type, self.out_type)
         if soften:
