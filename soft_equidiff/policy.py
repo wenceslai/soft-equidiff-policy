@@ -30,8 +30,8 @@ class Normalizer(nn.Module):
     def __init__(self, stats: Dict[str, Dict[str, torch.Tensor]]):
         super().__init__()
         for key, val in stats.items():
-            self.register_buffer(f"{key.replace('.', '_')}_min", val["min"])
-            self.register_buffer(f"{key.replace('.', '_')}_max", val["max"])
+            self.register_buffer(f"{key.replace('.', '_')}_min", torch.as_tensor(val["min"]).float())
+            self.register_buffer(f"{key.replace('.', '_')}_max", torch.as_tensor(val["max"]).float())
         self._keys = list(stats.keys())
 
     def normalize(self, key: str, x: torch.Tensor) -> torch.Tensor:
