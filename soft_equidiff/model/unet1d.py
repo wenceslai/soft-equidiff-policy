@@ -10,6 +10,7 @@ import math
 from typing import Union
 
 import einops
+import einops.layers.torch
 import torch
 import torch.nn as nn
 
