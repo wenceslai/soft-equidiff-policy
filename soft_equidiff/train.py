@@ -58,6 +58,8 @@ def parse_args():
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--log_every", type=int, default=500)
     p.add_argument("--save_every", type=int, default=50_000)
+    p.add_argument("--resume", default=None, metavar="CHECKPOINT",
+                   help="Path to a .pt checkpoint to resume training from")
 
     # Camera tilt
     p.add_argument("--tilt_degrees", type=float, default=0.0)
@@ -188,6 +190,15 @@ def train(args):
     policy = SoftEquiDiffPolicy(config, dataset_stats=stats).to(device)
     optimizer = torch.optim.AdamW(policy.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
+    start_step = 1
+    if args.resume is not None:
+        print(f"Resuming from checkpoint: {args.resume}")
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        policy.load_state_dict(ckpt["model_state_dict"], strict=False)
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        start_step = ckpt["step"] + 1
+        print(f"  Resuming from step {ckpt['step']}")
+
     n_params = sum(p.numel() for p in policy.parameters())
     print(f"Starting training: {args.run_name}")
     print(f"  Mode: {config.penalty_mode}, λ={config.lambda_base}, tilt={config.camera_tilt_degrees}°")
@@ -210,7 +221,7 @@ def train(args):
     t0 = time.time()
     step_t0 = t0
 
-    for step in range(1, config.num_train_steps + 1):
+    for step in range(start_step, config.num_train_steps + 1):
         try:
             batch = next(data_iter)
         except StopIteration:
