@@ -260,6 +260,7 @@ def train(args):
                 "model_state_dict": policy.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "config": config,
+                "dataset_stats": stats,
             }, ckpt_path)
             print(f"Saved checkpoint: {ckpt_path}")
 
