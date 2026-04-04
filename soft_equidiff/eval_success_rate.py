@@ -150,7 +150,7 @@ def evaluate_checkpoint(
         dict with "success_rate", "mean_coverage", "std_coverage",
                   "successes" (list of bool), "coverages" (list of float)
     """
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     config: SoftEquiDiffConfig = ckpt["config"]
 
     policy = SoftEquiDiffPolicy(config).to(device)
