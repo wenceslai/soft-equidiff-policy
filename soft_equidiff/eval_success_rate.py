@@ -153,14 +153,14 @@ def evaluate_checkpoint(
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     config: SoftEquiDiffConfig = ckpt["config"]
 
-    policy = SoftEquiDiffPolicy(config).to(device)
-    policy.load_state_dict(ckpt["model_state_dict"])
-    policy.eval()
+    # Pass dataset_stats so the normalizer is created before loading state_dict
+    dataset_stats = ckpt.get("dataset_stats", None)
+    policy = SoftEquiDiffPolicy(config, dataset_stats=dataset_stats).to(device)
 
-    # Attach normalizer stats stored in checkpoint if available
-    if "dataset_stats" in ckpt and config.normalize_inputs:
-        from .policy import Normalizer
-        policy.normalizer = Normalizer(ckpt["dataset_stats"]).to(device)
+    # strict=False: escnn registers filter/matrix/expanded_bias as non-persistent
+    # buffers (recomputed on init, not saved), so they'll appear as missing keys
+    policy.load_state_dict(ckpt["model_state_dict"], strict=False)
+    policy.eval()
 
     env = make_env(seed=base_seed)
 
