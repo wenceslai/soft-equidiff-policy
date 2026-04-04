@@ -46,6 +46,7 @@ uv pip install -e .
 
 # 12. (Optional) For success rate eval
 uv pip install gym_pusht gymnasium
+uv pip install "pymunk<7"
 
 # 13. Verify installation
 python -c "import torch; import escnn; import lerobot; import wandb; print('All good')"
@@ -67,3 +68,11 @@ python -m soft_equidiff.train \
 # to exist control + b, d
 
 tmux attach -t train
+
+
+python -m soft_equidiff.eval_success_rate \
+    --checkpoint outputs/baseline_no_softening/policy_step0050000.pt \
+    --n_episodes 50 \
+    --device cuda \
+    --wandb_project soft-equidiff-policy \
+    --wandb_run_name baseline_no_softening_eval

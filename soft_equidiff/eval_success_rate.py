@@ -50,7 +50,7 @@ def make_env(seed: int = 0):
             "Push-T gym not found. Install with:\n"
             "  pip install gym_pusht gymnasium"
         )
-    env = gym.make("gym_pusht/PushT-v0", obs_type="pixels_agent_pos", render_mode=None)
+    env = gym.make("gym_pusht/PushT-v0", obs_type="pixels_agent_pos", render_mode="rgb_array")
     env.reset(seed=seed)
     return env
 
