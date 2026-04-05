@@ -39,7 +39,7 @@ class SoftEquiDiffConfig:
     # -----------------------------------------------------------------------
     # U-Net
     # -----------------------------------------------------------------------
-    unet_down_dims: Tuple[int, ...] = (256, 512, 1024)
+    unet_down_dims: Tuple[int, ...] = (64, 128, 256) # (128, 256, 512)
     unet_diffusion_step_embed_dim: int = 128
     unet_kernel_size: int = 5
     unet_n_groups: int = 8
