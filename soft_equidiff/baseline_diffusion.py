@@ -413,8 +413,7 @@ def _build_dataset(config: BaseDiffConfig, tilt_transform=None):
     except ImportError:
         raise ImportError("LeRobot not found. Install with: pip install -e lerobot/")
 
-    dataset = LeRobotDataset(
-        config.dataset_repo_id,
+    dataset_kwargs = dict(
         delta_timestamps={
             "observation.image": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
             "observation.state": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
@@ -422,6 +421,12 @@ def _build_dataset(config: BaseDiffConfig, tilt_transform=None):
         },
         image_transforms=tilt_transform,
     )
+    try:
+        dataset = LeRobotDataset(config.dataset_repo_id, **dataset_kwargs)
+        _ = dataset[0]
+    except RuntimeError:
+        print("torchcodec unavailable, retrying with video_backend='pyav' ...")
+        dataset = LeRobotDataset(config.dataset_repo_id, video_backend="pyav", **dataset_kwargs)
     stats = {
         "observation.state": {
             "min": dataset.meta.stats["observation.state"]["min"],

@@ -90,8 +90,7 @@ def build_dataset(config: SoftEquiDiffConfig, tilt_transform=None):
             "  git clone https://github.com/huggingface/lerobot && cd lerobot && pip install -e ."
         )
 
-    dataset = LeRobotDataset(
-        config.dataset_repo_id,
+    dataset_kwargs = dict(
         delta_timestamps={
             "observation.image": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
             "observation.state": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
@@ -99,6 +98,15 @@ def build_dataset(config: SoftEquiDiffConfig, tilt_transform=None):
         },
         image_transforms=tilt_transform,
     )
+    # torchcodec (newer LeRobot default) requires kernel-level video decode support
+    # that is unavailable on some HPC nodes — fall back to pyav automatically.
+    try:
+        dataset = LeRobotDataset(config.dataset_repo_id, **dataset_kwargs)
+        # trigger a decode to verify the backend works before training starts
+        _ = dataset[0]
+    except RuntimeError:
+        print("torchcodec unavailable, retrying with video_backend='pyav' ...")
+        dataset = LeRobotDataset(config.dataset_repo_id, video_backend="pyav", **dataset_kwargs)
 
     stats = {
         "observation.state": {
