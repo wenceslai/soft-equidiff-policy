@@ -69,6 +69,10 @@ def parse_args():
     p.add_argument("--n_hidden", type=int, default=64)  # features per group element
     p.add_argument("--n_obs_steps", type=int, default=2)
 
+    # Dataset
+    p.add_argument("--video_backend", default="pyav", choices=["pyav", "torchcodec"],
+                   help="LeRobot video decode backend (default: pyav, works everywhere)")
+
     # Wandb
     p.add_argument("--wandb_project", default="soft-equidiff-pusht")
     p.add_argument("--wandb_entity", default=None, help="wandb team/username (optional)")
