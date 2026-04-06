@@ -81,7 +81,7 @@ def parse_args():
     return p.parse_args()
 
 
-def build_dataset(config: SoftEquiDiffConfig, tilt_transform=None):
+def build_dataset(config: SoftEquiDiffConfig, tilt_transform=None, video_backend: str = "pyav"):
     """Load LeRobot Push-T dataset."""
     try:
         try:
@@ -94,23 +94,16 @@ def build_dataset(config: SoftEquiDiffConfig, tilt_transform=None):
             "  git clone https://github.com/huggingface/lerobot && cd lerobot && pip install -e ."
         )
 
-    dataset_kwargs = dict(
+    dataset = LeRobotDataset(
+        config.dataset_repo_id,
         delta_timestamps={
             "observation.image": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
             "observation.state": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
             "action": [i / 10.0 for i in range(config.horizon)],
         },
         image_transforms=tilt_transform,
+        video_backend=video_backend,
     )
-    # torchcodec (newer LeRobot default) requires kernel-level video decode support
-    # that is unavailable on some HPC nodes — fall back to pyav automatically.
-    try:
-        dataset = LeRobotDataset(config.dataset_repo_id, **dataset_kwargs)
-        # trigger a decode to verify the backend works before training starts
-        _ = dataset[0]
-    except RuntimeError:
-        print("torchcodec unavailable, retrying with video_backend='pyav' ...")
-        dataset = LeRobotDataset(config.dataset_repo_id, video_backend="pyav", **dataset_kwargs)
 
     stats = {
         "observation.state": {
@@ -197,7 +190,7 @@ def train(args):
     tilt_transform = make_tilt_transform(args.tilt_degrees) if args.tilt_degrees > 0 else None
 
     print(f"Loading dataset: {config.dataset_repo_id}")
-    dataset, stats = build_dataset(config, tilt_transform)
+    dataset, stats = build_dataset(config, tilt_transform, video_backend=args.video_backend)
 
     policy = SoftEquiDiffPolicy(config, dataset_stats=stats).to(device)
     optimizer = torch.optim.AdamW(policy.parameters(), lr=config.lr, weight_decay=config.weight_decay)
