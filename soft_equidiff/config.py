@@ -19,9 +19,9 @@ class SoftEquiDiffConfig:
     # Architecture
     # -----------------------------------------------------------------------
     n_rotations: int = 8           # C_N group order (cyclic rotational symmetry)
-    enc_n_hidden: int = 128         # regular-repr fields in image encoder output
-    state_features: int = 64       # regular-repr fields in state encoder output
-    action_features: int = 64      # regular-repr fields per timestep in action encoder/decoder
+    enc_n_hidden: int = 64         # regular-repr fields in image encoder output
+    state_features: int = 32       # regular-repr fields in state encoder output
+    action_features: int = 32      # regular-repr fields per timestep in action encoder/decoder
 
     # -----------------------------------------------------------------------
     # Diffusion (match LeRobot Push-T defaults)
