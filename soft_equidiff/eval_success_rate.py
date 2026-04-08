@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from .baseline_diffusion import BaseDiffConfig
 from .config import SoftEquiDiffConfig
 from .policy import SoftEquiDiffPolicy
 
