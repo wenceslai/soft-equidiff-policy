@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .baseline_diffusion import BaseDiffConfig
+from .baseline_diffusion import BaseDiffConfig, BaseDiffPolicy
 from .config import SoftEquiDiffConfig
 from .policy import SoftEquiDiffPolicy
 
@@ -152,11 +152,14 @@ def evaluate_checkpoint(
                   "successes" (list of bool), "coverages" (list of float)
     """
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    config: SoftEquiDiffConfig = ckpt["config"]
+    config = ckpt["config"]
 
     # Pass dataset_stats so the normalizer is created before loading state_dict
     dataset_stats = ckpt.get("dataset_stats", None)
-    policy = SoftEquiDiffPolicy(config, dataset_stats=dataset_stats).to(device)
+    if isinstance(config, BaseDiffConfig):
+        policy = BaseDiffPolicy(config, dataset_stats=dataset_stats).to(device)
+    else:
+        policy = SoftEquiDiffPolicy(config, dataset_stats=dataset_stats).to(device)
 
     # strict=False: escnn registers filter/matrix/expanded_bias as non-persistent
     # buffers (recomputed on init, not saved), so they'll appear as missing keys
