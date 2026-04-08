@@ -12,7 +12,8 @@
       "Read(//private/tmp/equidiff/**)",
       "Read(//private/tmp/equidiff/equi_diffpo/**)",
       "Bash(curl -L -A \"Mozilla/5.0\" \"https://raw.githubusercontent.com/huggingface/lerobot/main/src/lerobot/common/policies/diffusion/modeling_diffusion.py\" -o /tmp/modeling_diffusion.py)",
-      "Read(//private/tmp/**)"
+      "Read(//private/tmp/**)",
+      "Bash(python3:*)"
     ]
   }
 }

@@ -68,6 +68,8 @@ def parse_args():
     p.add_argument("--N", type=int, default=8, help="C_N group order")
     p.add_argument("--n_hidden", type=int, default=64)  # features per group element
     p.add_argument("--n_obs_steps", type=int, default=2) # how many past observation frames to stack
+    p.add_argument("--unet_down_dims", type=int, nargs="+", default=[256, 512, 1024],
+                   help="U-Net encoder channel widths, e.g. --unet_down_dims 64 128 256")
 
     # Dataset
     p.add_argument("--video_backend", default="pyav", choices=["pyav", "torchcodec"],
@@ -116,6 +118,17 @@ def build_dataset(config: SoftEquiDiffConfig, tilt_transform=None, video_backend
         },
     }
 
+    # Equivariant normalization: x and y must use the same scale so that
+    # normalized vectors remain proper 2D Euclidean vectors under irrep(1).
+    # Per-component min-max would distort rotations if x_range ≠ y_range.
+    for key in ["observation.state", "action"]:
+        lo = torch.as_tensor(stats[key]["min"]).float().clone()
+        hi = torch.as_tensor(stats[key]["max"]).float().clone()
+        max_range = (hi - lo).max()
+        centers = (lo + hi) / 2.0
+        stats[key]["min"] = centers - max_range / 2.0
+        stats[key]["max"] = centers + max_range / 2.0
+
     return dataset, stats
 
 
@@ -145,6 +158,7 @@ def train(args):
         soften_state_encoder=not args.no_soften_state,
         soften_action_encoder=not args.no_soften_action,
         soften_decoder=not args.no_soften_decoder,
+        unet_down_dims=tuple(args.unet_down_dims),
         num_train_steps=args.num_steps,
         batch_size=args.batch_size,
         lr=args.lr,
