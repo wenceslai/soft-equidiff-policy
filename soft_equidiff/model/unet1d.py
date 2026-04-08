@@ -47,7 +47,7 @@ class Conv1dBlock(nn.Module):
 class Downsample1d(nn.Module):
     def __init__(self, dim):
         super().__init__()
-        self.conv = nn.Conv1d(dim, dim, 3, 2, 1)
+        self.conv = nn.Conv1d(dim, dim, 3, 2, 1) # in_channels, out_channels, kernel_size, stride, padding
 
     def forward(self, x):
         return self.conv(x)
@@ -56,7 +56,7 @@ class Downsample1d(nn.Module):
 class Upsample1d(nn.Module):
     def __init__(self, dim):
         super().__init__()
-        self.conv = nn.ConvTranspose1d(dim, dim, 4, 2, 1)
+        self.conv = nn.ConvTranspose1d(dim, dim, 4, 2, 1) # in_channels, out_channels, kernel_size, stride, padding
 
     def forward(self, x):
         return self.conv(x)

@@ -10,7 +10,7 @@ paper map to:
 """
 
 from dataclasses import dataclass, field
-from typing import Tuple
+from typing import Tuple 
 
 
 @dataclass

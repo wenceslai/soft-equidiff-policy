@@ -29,8 +29,8 @@ class EquiDecoder(nn.Module):
         self.in_fields = in_fields
         self.soften = soften
 
-        group = gspaces.rot2dOnR2(N).fibergroup
-        self.gs0 = gspaces.no_base_space(group)
+        group = gspaces.rot2dOnR2(N).fibergroup # fibergroup is the object representing gruops actions on objects. We're rotating 2d vectors in 2d spacce
+        self.gs0 = gspaces.no_base_space(group) # no spatial structure
 
         # in_fields * regular_repr → 1 * irrep(1)  (2D action vector)
         self.in_type = enn.FieldType(self.gs0, in_fields * [self.gs0.regular_repr])
@@ -45,7 +45,7 @@ class EquiDecoder(nn.Module):
     def forward(self, noise_embed: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            noise_embed: (B * N, T_a, in_fields) — UNet output, per-group-element layout
+            noise_embed: (B * N, T_a, in_fields) — UNet output, per-group-element layout, T_a is the number of action steps in the horizon
         Returns:
             (B, T_a, 2)
         """

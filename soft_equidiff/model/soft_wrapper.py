@@ -121,4 +121,4 @@ class EquivariancePenaltySchedule:
             ratio = k / self.K
         else:
             ratio = k.float().mean().item() / self.K
-        return self.lambda_base * (ratio ** self.power)
+        return self.lambda_base * (ratio ** self.power) # if power is 1 linear, if power is 2 quadratic (stronger push toward equivariance at high noise)

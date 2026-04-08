@@ -248,7 +248,7 @@ def parse_args():
                    help="Path to .pt checkpoint (or comma-separated list for comparison)")
     p.add_argument("--labels", default=None,
                    help="Comma-separated labels matching --checkpoint order")
-    p.add_argument("--device", default="cpu")
+    p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--n_samples", type=int, default=100)
     p.add_argument("--steps", nargs="+", type=int, default=[0, 10, 25, 50, 75, 99])
     p.add_argument("--save_dir", default=".")

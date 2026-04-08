@@ -161,6 +161,7 @@ class SoftEquiDiffPolicy(nn.Module):
         # Sample noise and diffusion step
         noise = torch.randn_like(actions)
         k = torch.randint(0, self.config.num_diffusion_steps, (B,), device=device)
+
         noisy_actions = self.noise_scheduler.add_noise(actions, noise, k)
 
         # Predict noise
@@ -224,7 +225,7 @@ class SoftEquiDiffPolicy(nn.Module):
         for t in self.noise_scheduler.timesteps:
             timestep = torch.full((B,), t, dtype=torch.long, device=device)
             noise_pred = self.model(obs_images, obs_state, actions, timestep)
-            actions = self.noise_scheduler.step(noise_pred, t, actions).prev_sample
+            actions = self.noise_scheduler.step(noise_pred, t, actions).prev_sample # x_{t-1} = (1/√α_t) * (x_t - β_t/(√(1-ᾱ_t)) * ε_pred) + √(β̃_t) * z
 
         # Unnormalise actions
         if self.normalizer is not None:

@@ -57,7 +57,7 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--log_every", type=int, default=500)
-    p.add_argument("--save_every", type=int, default=50_000)
+    p.add_argument("--save_every", type=int, default=25_000)
     p.add_argument("--resume", default=None, metavar="CHECKPOINT",
                    help="Path to a .pt checkpoint to resume training from")
 
@@ -67,7 +67,7 @@ def parse_args():
     # Architecture
     p.add_argument("--N", type=int, default=8, help="C_N group order")
     p.add_argument("--n_hidden", type=int, default=64)  # features per group element
-    p.add_argument("--n_obs_steps", type=int, default=2)
+    p.add_argument("--n_obs_steps", type=int, default=2) # how many past observation frames to stack
 
     # Dataset
     p.add_argument("--video_backend", default="pyav", choices=["pyav", "torchcodec"],
@@ -230,6 +230,7 @@ def train(args):
         try:
             batch = next(data_iter)
         except StopIteration:
+            print("DataLoader ran out of data, restarting...")
             data_iter = iter(dataloader)
             batch = next(data_iter)
 
@@ -254,7 +255,7 @@ def train(args):
                 f"| equi {losses['equi_penalty'].item():.4f} "
                 f"| λ {losses['lambda'].item():.4f} "
                 f"| grad {grad_norm:.3f} "
-                f"| {steps_per_sec:.1f} s/s "
+                f"| {steps_per_sec:.1f} steps/s "
                 f"| {elapsed:.0f}s elapsed"
             )
 
