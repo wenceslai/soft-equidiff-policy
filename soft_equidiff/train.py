@@ -30,6 +30,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
+from .augmentation import C4Augmentation
 from .config import SoftEquiDiffConfig
 from .policy import SoftEquiDiffPolicy
 from .camera_tilt import make_tilt_transform
@@ -74,6 +75,11 @@ def parse_args():
     p.add_argument("--n_obs_steps", type=int, default=2) # how many past observation frames to stack
     p.add_argument("--unet_down_dims", type=int, nargs="+", default=[256, 512, 1024],
                    help="U-Net encoder channel widths, e.g. --unet_down_dims 64 128 256")
+
+    # Rotation augmentation
+    p.add_argument("--rot_aug", action="store_true",
+                   help="Apply C₄ rotation augmentation (rotate image+state+action together). "
+                        "Use with --N 4 so the model group order matches the augmentation.")
 
     # Dataset
     p.add_argument("--video_backend", default="pyav", choices=["pyav", "torchcodec"],
@@ -274,6 +280,16 @@ def train(args):
         config, tilt_transform, video_backend=args.video_backend
     )
 
+    # C₄ rotation augmentation — instantiated once, applied per batch on GPU.
+    # Workspace center is derived from the isotropic-normalised stats so that
+    # the rotation pivot matches the geometric centre of the coordinate space.
+    rot_aug = None
+    if args.rot_aug:
+        ws_center = (torch.as_tensor(stats["observation.state"]["min"]).float()
+                     + torch.as_tensor(stats["observation.state"]["max"]).float()) / 2.0
+        rot_aug = C4Augmentation(ws_center)
+        print(f"  C₄ rotation augmentation enabled  (workspace center: {ws_center.tolist()})")
+
     policy = SoftEquiDiffPolicy(config, dataset_stats=stats).to(device)
     optimizer = torch.optim.AdamW(policy.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
@@ -326,6 +342,8 @@ def train(args):
             batch = next(data_iter)
 
         batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+        if rot_aug is not None:
+            batch = rot_aug(batch)
 
         optimizer.zero_grad()
         losses = policy(batch)
