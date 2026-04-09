@@ -77,7 +77,7 @@ class SoftEquiDiffConfig:
     lr: float = 1e-4
     weight_decay: float = 1e-6
     batch_size: int = 64
-    num_train_steps: int = 200_000
+    num_train_steps: int = 250_000
     grad_clip_norm: float = 10.0
 
     # -----------------------------------------------------------------------

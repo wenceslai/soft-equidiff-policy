@@ -58,6 +58,10 @@ def parse_args():
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--log_every", type=int, default=500)
     p.add_argument("--save_every", type=int, default=25_000)
+    p.add_argument("--val_every", type=int, default=10_000,
+                   help="Compute and log validation MSE loss every N steps")
+    p.add_argument("--val_batches", type=int, default=32,
+                   help="Number of val batches to average over per validation pass")
     p.add_argument("--resume", default=None, metavar="CHECKPOINT",
                    help="Path to a .pt checkpoint to resume training from")
 
@@ -83,8 +87,22 @@ def parse_args():
     return p.parse_args()
 
 
-def build_dataset(config: SoftEquiDiffConfig, tilt_transform=None, video_backend: str = "pyav"):
-    """Load LeRobot Push-T dataset."""
+def build_dataset(
+    config: SoftEquiDiffConfig,
+    tilt_transform=None,
+    video_backend: str = "pyav",
+    val_fraction: float = 0.1,
+):
+    """
+    Load LeRobot Push-T dataset and split into train / val by episode index.
+
+    The last `val_fraction` of episodes (sorted by index) become the val set.
+    Stats are derived from the full dataset so the normalizer is stable regardless
+    of split size.
+
+    Returns:
+        train_dataset, val_dataset, stats
+    """
     try:
         try:
             from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
@@ -96,25 +114,37 @@ def build_dataset(config: SoftEquiDiffConfig, tilt_transform=None, video_backend
             "  git clone https://github.com/huggingface/lerobot && cd lerobot && pip install -e ."
         )
 
-    dataset = LeRobotDataset(
+    delta_ts = {
+        "observation.image": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
+        "observation.state": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
+        "action":            [i / 10.0 for i in range(config.horizon)],
+    }
+
+    # Load full dataset once — cheap, only reads metadata and caches video index.
+    full_dataset = LeRobotDataset(
         config.dataset_repo_id,
-        delta_timestamps={
-            "observation.image": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
-            "observation.state": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
-            "action": [i / 10.0 for i in range(config.horizon)],
-        },
-        image_transforms=tilt_transform,
+        delta_timestamps=delta_ts,
         video_backend=video_backend,
     )
 
+    total_episodes = full_dataset.meta.total_episodes
+    n_val = max(1, round(total_episodes * val_fraction))
+    n_train = total_episodes - n_val
+    train_eps = list(range(n_train))
+    val_eps   = list(range(n_train, total_episodes))
+    print(f"  Dataset split: {n_train} train episodes / {n_val} val episodes "
+          f"(total {total_episodes})")
+
+    # Stats from the full dataset (negligible leakage; avoids skewed normalization
+    # from a small val subset).
     stats = {
         "observation.state": {
-            "min": dataset.meta.stats["observation.state"]["min"],
-            "max": dataset.meta.stats["observation.state"]["max"],
+            "min": full_dataset.meta.stats["observation.state"]["min"],
+            "max": full_dataset.meta.stats["observation.state"]["max"],
         },
         "action": {
-            "min": dataset.meta.stats["action"]["min"],
-            "max": dataset.meta.stats["action"]["max"],
+            "min": full_dataset.meta.stats["action"]["min"],
+            "max": full_dataset.meta.stats["action"]["max"],
         },
     }
 
@@ -125,11 +155,47 @@ def build_dataset(config: SoftEquiDiffConfig, tilt_transform=None, video_backend
         lo = torch.as_tensor(stats[key]["min"]).float().clone()
         hi = torch.as_tensor(stats[key]["max"]).float().clone()
         max_range = (hi - lo).max()
-        centers = (lo + hi) / 2.0
+        centers   = (lo + hi) / 2.0
         stats[key]["min"] = centers - max_range / 2.0
         stats[key]["max"] = centers + max_range / 2.0
 
-    return dataset, stats
+    # Train split — with image augmentation (tilt transform if any).
+    train_dataset = LeRobotDataset(
+        config.dataset_repo_id,
+        delta_timestamps=delta_ts,
+        episodes=train_eps,
+        image_transforms=tilt_transform,
+        video_backend=video_backend,
+    )
+    # Val split — no image augmentation so loss is comparable across runs.
+    val_dataset = LeRobotDataset(
+        config.dataset_repo_id,
+        delta_timestamps=delta_ts,
+        episodes=val_eps,
+        video_backend=video_backend,
+    )
+
+    return train_dataset, val_dataset, stats
+
+
+@torch.no_grad()
+def _compute_val_loss(policy, val_loader, device, n_batches: int) -> float:
+    """
+    Average MSE loss over up to `n_batches` batches from the val dataloader.
+    Switches policy to eval mode and back to train mode afterwards.
+    """
+    policy.eval()
+    total_mse = 0.0
+    count = 0
+    for batch in val_loader:
+        if count >= n_batches:
+            break
+        batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+        losses = policy(batch)
+        total_mse += losses["mse_loss"].item()
+        count += 1
+    policy.train()
+    return total_mse / max(count, 1)
 
 
 def _grad_norm(policy):
@@ -204,7 +270,9 @@ def train(args):
     tilt_transform = make_tilt_transform(args.tilt_degrees) if args.tilt_degrees > 0 else None
 
     print(f"Loading dataset: {config.dataset_repo_id}")
-    dataset, stats = build_dataset(config, tilt_transform, video_backend=args.video_backend)
+    train_dataset, val_dataset, stats = build_dataset(
+        config, tilt_transform, video_backend=args.video_backend
+    )
 
     policy = SoftEquiDiffPolicy(config, dataset_stats=stats).to(device)
     optimizer = torch.optim.AdamW(policy.parameters(), lr=config.lr, weight_decay=config.weight_decay)
@@ -222,17 +290,26 @@ def train(args):
     print(f"Starting training: {args.run_name}")
     print(f"  Mode: {config.penalty_mode}, λ={config.lambda_base}, tilt={config.camera_tilt_degrees}°")
     print(f"  Parameters: {n_params:,}")
+    print(f"  Val loss every {args.val_every} steps ({args.val_batches} batches × {config.batch_size})")
 
     if use_wandb:
         wandb.summary["n_params"] = n_params
 
     dataloader = DataLoader(
-        dataset,
+        train_dataset,
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=4,
         pin_memory=True,
         drop_last=True,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.batch_size,
+        shuffle=True,      # shuffle so each val pass samples different frames
+        num_workers=2,
+        pin_memory=True,
+        drop_last=False,
     )
     data_iter = iter(dataloader)
 
@@ -283,6 +360,12 @@ def train(args):
                     "train/steps_per_sec": steps_per_sec,
                     "train/elapsed_sec":  elapsed,
                 }, step=step)
+
+        if step % args.val_every == 0:
+            val_mse = _compute_val_loss(policy, val_loader, device, n_batches=args.val_batches)
+            print(f"step {step:>7d} | val/mse_loss {val_mse:.4f}")
+            if use_wandb:
+                wandb.log({"val/mse_loss": val_mse}, step=step)
 
         if step % args.save_every == 0 or step == config.num_train_steps:
             ckpt_path = out_dir / f"policy_step{step:07d}.pt"
