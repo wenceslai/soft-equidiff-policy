@@ -404,7 +404,8 @@ class BaseDiffPolicy(nn.Module):
 # Dataset helpers (identical to train.py)
 # ---------------------------------------------------------------------------
 
-def _build_dataset(config: BaseDiffConfig, tilt_transform=None, video_backend: str = "pyav"):
+def _build_dataset(config: BaseDiffConfig, tilt_transform=None, video_backend: str = "pyav",
+                   val_fraction: float = 0.1):
     try:
         try:
             from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
@@ -413,27 +414,55 @@ def _build_dataset(config: BaseDiffConfig, tilt_transform=None, video_backend: s
     except ImportError:
         raise ImportError("LeRobot not found. Install with: pip install -e lerobot/")
 
-    dataset = LeRobotDataset(
-        config.dataset_repo_id,
-        delta_timestamps={
-            "observation.image": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
-            "observation.state": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
-            "action":            [i / 10.0 for i in range(config.horizon)],
-        },
-        image_transforms=tilt_transform,
-        video_backend=video_backend,
-    )
+    delta_ts = {
+        "observation.image": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
+        "observation.state": [i / 10.0 for i in range(-config.n_obs_steps + 1, 1)],
+        "action":            [i / 10.0 for i in range(config.horizon)],
+    }
+
+    full_dataset = LeRobotDataset(config.dataset_repo_id, delta_timestamps=delta_ts,
+                                  video_backend=video_backend)
+
+    total_episodes = full_dataset.meta.total_episodes
+    n_val   = max(1, round(total_episodes * val_fraction))
+    n_train = total_episodes - n_val
+    train_eps = list(range(n_train))
+    val_eps   = list(range(n_train, total_episodes))
+    print(f"  Dataset split: {n_train} train episodes / {n_val} val episodes "
+          f"(total {total_episodes})")
+
     stats = {
         "observation.state": {
-            "min": dataset.meta.stats["observation.state"]["min"],
-            "max": dataset.meta.stats["observation.state"]["max"],
+            "min": full_dataset.meta.stats["observation.state"]["min"],
+            "max": full_dataset.meta.stats["observation.state"]["max"],
         },
         "action": {
-            "min": dataset.meta.stats["action"]["min"],
-            "max": dataset.meta.stats["action"]["max"],
+            "min": full_dataset.meta.stats["action"]["min"],
+            "max": full_dataset.meta.stats["action"]["max"],
         },
     }
-    return dataset, stats
+
+    train_dataset = LeRobotDataset(config.dataset_repo_id, delta_timestamps=delta_ts,
+                                   episodes=train_eps, image_transforms=tilt_transform,
+                                   video_backend=video_backend)
+    val_dataset   = LeRobotDataset(config.dataset_repo_id, delta_timestamps=delta_ts,
+                                   episodes=val_eps, video_backend=video_backend)
+
+    return train_dataset, val_dataset, stats
+
+
+@torch.no_grad()
+def _compute_val_loss(policy: nn.Module, val_loader, device, n_batches: int) -> float:
+    policy.eval()
+    total_mse, count = 0.0, 0
+    for batch in val_loader:
+        if count >= n_batches:
+            break
+        batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+        total_mse += policy(batch)["mse_loss"].item()
+        count += 1
+    policy.train()
+    return total_mse / max(count, 1)
 
 
 def _grad_norm(policy: nn.Module) -> float:
@@ -487,7 +516,7 @@ def train(args):
             use_wandb = False
 
     print(f"Loading dataset: {config.dataset_repo_id}")
-    dataset, stats = _build_dataset(config)
+    train_dataset, val_dataset, stats = _build_dataset(config)
 
     policy    = BaseDiffPolicy(config, dataset_stats=stats).to(device)
     optimizer = torch.optim.AdamW(policy.parameters(), lr=config.lr, weight_decay=config.weight_decay)
@@ -502,14 +531,23 @@ def train(args):
 
     n_params = sum(p.numel() for p in policy.parameters())
     print(f"Starting training: {args.run_name}  |  params: {n_params:,}")
+    print(f"  Val loss every {args.val_every} steps ({args.val_batches} batches × {config.batch_size})")
 
     dataloader = DataLoader(
-        dataset,
+        train_dataset,
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=4,
         pin_memory=True,
         drop_last=True,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.batch_size,
+        shuffle=True,
+        num_workers=2,
+        pin_memory=True,
+        drop_last=False,
     )
     data_iter = iter(dataloader)
     policy.train()
@@ -545,6 +583,12 @@ def train(args):
                     "train/grad_norm":     gn,
                     "train/steps_per_sec": sps,
                 }, step=step)
+
+        if step % args.val_every == 0:
+            val_mse = _compute_val_loss(policy, val_loader, device, n_batches=args.val_batches)
+            print(f"step {step:>7d} | val/mse_loss {val_mse:.4f}")
+            if use_wandb:
+                wandb.log({"val/mse_loss": val_mse}, step=step)
 
         if step % args.save_every == 0 or step == config.num_train_steps:
             ckpt_path = out_dir / f"policy_step{step:07d}.pt"
@@ -683,6 +727,8 @@ def main():
     tp.add_argument("--n_obs_steps", type=int, default=2)
     tp.add_argument("--log_every",   type=int, default=500)
     tp.add_argument("--save_every",  type=int, default=50_000)
+    tp.add_argument("--val_every",   type=int, default=10_000)
+    tp.add_argument("--val_batches", type=int, default=32)
     tp.add_argument("--resume",      default=None)
     tp.add_argument("--wandb_entity", default=None)
 
