@@ -189,21 +189,29 @@ def save_gif(frames: list, path: Path, fps: int = 10) -> bool:
     """
     Save a list of (H, W, 3) uint8 arrays as an animated GIF.
 
-    Returns True on success, False if imageio is missing.
+    Uses Pillow for maximum compatibility with macOS Preview / browsers.
+    Returns True on success, False if Pillow is missing.
     """
     try:
-        import imageio.v2 as iio
+        from PIL import Image
     except ImportError:
-        try:
-            import imageio as iio
-        except ImportError:
-            print("  [gif] imageio not installed — skipping GIF. "
-                  "Install with: pip install imageio")
-            return False
+        print("  [gif] Pillow not installed — skipping GIF. "
+              "Install with: pip install Pillow")
+        return False
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    iio.mimsave(str(path), frames, fps=fps, loop=0)
+
+    duration_ms = int(1000 / fps)   # Pillow takes milliseconds per frame
+    pil_frames = [Image.fromarray(f) for f in frames]
+    pil_frames[0].save(
+        str(path),
+        save_all=True,
+        append_images=pil_frames[1:],
+        duration=duration_ms,
+        loop=0,
+        optimize=False,   # skip palette optimisation — faster and more compatible
+    )
     print(f"  [gif] saved → {path}  ({len(frames)} frames @ {fps} fps)")
     return True
 
