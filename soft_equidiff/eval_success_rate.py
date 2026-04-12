@@ -32,6 +32,7 @@ Requires:
 """
 
 import argparse
+import math
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +41,37 @@ import torch
 from .baseline_diffusion import BaseDiffConfig, BaseDiffPolicy
 from .config import SoftEquiDiffConfig
 from .policy import SoftEquiDiffPolicy
+
+
+# ---------------------------------------------------------------------------
+# Test-time rotation helpers
+# ---------------------------------------------------------------------------
+
+# Workspace centre in raw Push-T coordinates (same as augmentation.py)
+_WS_CENTER = (256.0, 256.0)
+
+# Rotation matrices for k=1,2,3 quarter-turns (same sign convention as C4Augmentation)
+_ROTMATS = {
+    0: ( 1.0,  0.0,  0.0,  1.0),   # identity
+    1: ( 0.0, -1.0,  1.0,  0.0),   # 90°  CCW: x'=-y, y'= x
+    2: (-1.0,  0.0,  0.0, -1.0),   # 180°
+    3: ( 0.0,  1.0, -1.0,  0.0),   # 270° CCW: x'= y, y'=-x
+}
+
+
+def _rotate_vec(xy: np.ndarray, k: int, cx: float = _WS_CENTER[0],
+                cy: float = _WS_CENTER[1]) -> np.ndarray:
+    """Rotate a (..., 2) numpy array by k quarter-turns around (cx, cy)."""
+    cos_a, neg_sin_a, sin_a, _ = _ROTMATS[k % 4]
+    dx, dy = xy[..., 0] - cx, xy[..., 1] - cy
+    return np.stack([cx + cos_a * dx + neg_sin_a * dy,
+                     cy + sin_a * dx +       cos_a * dy], axis=-1)
+
+
+def _unrotate_vec(xy: np.ndarray, k: int, cx: float = _WS_CENTER[0],
+                  cy: float = _WS_CENTER[1]) -> np.ndarray:
+    """Inverse of _rotate_vec — rotate by -k quarter-turns."""
+    return _rotate_vec(xy, (-k) % 4, cx, cy)
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +93,8 @@ def make_env(seed: int = 0):
     return env
 
 
-def obs_to_batch(obs: dict, device: torch.device, obs_buffer: list, n_obs_steps: int) -> dict:
+def obs_to_batch(obs: dict, device: torch.device, obs_buffer: list, n_obs_steps: int,
+                 test_rotation: int = 0) -> dict:
     """
     Convert a gymnasium obs dict to a policy batch dict.
 
@@ -69,6 +102,11 @@ def obs_to_batch(obs: dict, device: torch.device, obs_buffer: list, n_obs_steps:
     Each obs has:
         "pixels"    — (H, W, 3) uint8
         "agent_pos" — (2,) float32
+
+    If test_rotation > 0, the image is rotated by test_rotation × 90° and the
+    agent position is rotated by the same amount around the workspace centre.
+    The caller is responsible for unrotating the returned action before executing
+    it in the environment.
 
     Returns batch with:
         "observation.image" — (1, n_obs_steps, 3, H, W) float32
@@ -78,8 +116,14 @@ def obs_to_batch(obs: dict, device: torch.device, obs_buffer: list, n_obs_steps:
     states = []
     for o in obs_buffer:
         img = torch.from_numpy(o["pixels"]).permute(2, 0, 1).float()  # (3, H, W)
+        if test_rotation:
+            img = torch.rot90(img, k=test_rotation, dims=[-2, -1])
         images.append(img)
-        states.append(torch.from_numpy(o["agent_pos"]).float())
+
+        pos = o["agent_pos"].copy()
+        if test_rotation:
+            pos = _rotate_vec(pos, test_rotation)
+        states.append(torch.from_numpy(pos).float())
 
     image_tensor = torch.stack(images, dim=0).unsqueeze(0).to(device)   # (1, n, 3, H, W)
     state_tensor = torch.stack(states, dim=0).unsqueeze(0).to(device)   # (1, n, 2)
@@ -99,6 +143,7 @@ def run_episode(
     success_threshold: float = 0.95,
     record: bool = False,
     print_actions: bool = False,
+    test_rotation: int = 0,
 ) -> dict:
     """
     Run a single Push-T episode.
@@ -138,9 +183,14 @@ def run_episode(
             frames.append(obs["pixels"].copy())
             agent_pos.append(obs["agent_pos"].copy())
 
-        batch = obs_to_batch(obs, device, obs_buffer, n_obs_steps)
-        action = policy.select_action(batch)  # (2,) unnormalised workspace coords
+        batch = obs_to_batch(obs, device, obs_buffer, n_obs_steps,
+                             test_rotation=test_rotation)
+        action = policy.select_action(batch)  # (2,) in (possibly rotated) workspace coords
         action_np = action.cpu().numpy()
+
+        # Unrotate action back to original frame before executing in env
+        if test_rotation:
+            action_np = _unrotate_vec(action_np, test_rotation)
 
         if print_actions:
             pos = obs["agent_pos"]
@@ -251,6 +301,7 @@ def evaluate_checkpoint(
     gif_save_path: Path = None,
     gif_fps: int = 10,
     print_actions: bool = False,
+    test_rotation: int = 0,
 ) -> dict:
     """
     Load a checkpoint and evaluate over n_episodes rollouts.
@@ -295,6 +346,7 @@ def evaluate_checkpoint(
             success_threshold=success_threshold,
             record=record_this,
             print_actions=(print_actions and record_this),
+            test_rotation=test_rotation,
         )
         successes.append(result["success"])
         coverages.append(result["coverage"])
@@ -347,6 +399,11 @@ def parse_args():
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--save_dir", default=".",
                    help="Directory to save GIFs and artefacts")
+
+    # Test-time rotation
+    p.add_argument("--test_rotation", type=int, default=0, choices=[0, 1, 2, 3],
+                   help="Rotate observations by N×90° at test time and unrotate actions before "
+                        "execution. 0=none, 1=90°, 2=180°, 3=270°. Tests equivariance robustness.")
 
     # Action printing
     p.add_argument("--print_actions", action="store_true",
@@ -418,6 +475,9 @@ def main():
             safe_label = label.replace(" ", "_").replace("/", "_")
             gif_path = save_dir / f"{safe_label}_ep0.gif"
 
+        if args.test_rotation:
+            print(f"  Test-time rotation: {args.test_rotation}×90° = {args.test_rotation*90}°")
+
         results = evaluate_checkpoint(
             checkpoint_path=ckpt_path,
             n_episodes=args.n_episodes,
@@ -428,6 +488,7 @@ def main():
             gif_save_path=gif_path,
             gif_fps=args.gif_fps,
             print_actions=args.print_actions,
+            test_rotation=args.test_rotation,
         )
         all_results[label] = results
 
