@@ -79,10 +79,13 @@ def measure_equivariance_error(
     k: int,
     n_samples: int = 100,
     device: str = "cpu",
-    center: tuple = (256.0, 256.0),
 ) -> float:
     """
     Measure ||ε(g·obs, g·a^k, k) - g·ε(obs, a^k, k)|| averaged over samples and group elements.
+
+    All rotations are applied in NORMALISED space where the workspace centre
+    maps to (0, 0), so state/action vectors are rotated around the origin.
+    Images are rotated around their pixel centre (unchanged).
 
     Returns:
         mean equivariance error (float)
@@ -94,6 +97,10 @@ def measure_equivariance_error(
     N = policy.config.n_rotations
     angles = [2 * math.pi * n / N for n in range(N)]
 
+    # Rotation centre in normalised space is (0, 0) — the equivariant
+    # normaliser maps the workspace centre to the origin.
+    norm_center = (0.0, 0.0)
+
     loader = DataLoader(dataset, batch_size=1, shuffle=True)
     errors = []
 
@@ -102,6 +109,7 @@ def measure_equivariance_error(
             break
 
         batch = {key: val.to(device) for key, val in batch.items() if isinstance(val, torch.Tensor)}
+        # _preprocess_batch normalises state/action to [-1, 1]
         obs_images, obs_state, actions = policy._preprocess_batch(batch)
 
         noise = torch.randn_like(actions)
@@ -111,14 +119,16 @@ def measure_equivariance_error(
         eps_orig = policy.model(obs_images, obs_state, noisy_actions, timestep)
 
         batch_errors = []
-        for angle in angles[1:]:  # skip identity
-            obs_rot    = rotate_image(obs_images, angle)
-            state_rot  = rotate_state(obs_state, angle, center)
-            noisy_rot  = rotate_action(noisy_actions, angle, center)
-            eps_rot    = policy.model(obs_rot, state_rot, noisy_rot, timestep)
+        for angle in angles[1:]:  # skip identity (k=0)
+            # Rotate image around pixel centre (correct for spatial equivariance)
+            obs_rot   = rotate_image(obs_images, angle)
+            # Rotate state/action in normalised space around (0, 0)
+            state_rot = rotate_state(obs_state, angle, center=norm_center)
+            noisy_rot = rotate_action(noisy_actions, angle, center=norm_center)
 
-            # Equivariance: ε(g·x) should equal g·ε(x)
-            # Noise lives in displacement space so rotate around origin
+            eps_rot = policy.model(obs_rot, state_rot, noisy_rot, timestep)
+
+            # Expected: rotating the original prediction by the same angle (around origin)
             eps_expected = rotate_action(eps_orig, angle, center=(0.0, 0.0))
             err = (eps_rot - eps_expected).norm(dim=-1).mean().item()
             batch_errors.append(err)
