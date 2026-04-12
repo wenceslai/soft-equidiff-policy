@@ -189,8 +189,9 @@ def plot_equivariance_vs_step(
         print(f"Loading {label} from {ckpt_path}")
         ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
         config = ckpt["config"]
-        policy = SoftEquiDiffPolicy(config).to(device)
-        policy.load_state_dict(ckpt["model_state_dict"])
+        dataset_stats = ckpt.get("dataset_stats", None)
+        policy = SoftEquiDiffPolicy(config, dataset_stats=dataset_stats).to(device)
+        policy.load_state_dict(ckpt["model_state_dict"], strict=False)
 
         errors = []
         for k in steps:
@@ -321,8 +322,9 @@ def main():
         raise ImportError("LeRobot required for evaluation. See requirements.txt.")
 
     # --- Free weight norms (single checkpoint) ---
-    policy = SoftEquiDiffPolicy(config).to(device)
-    policy.load_state_dict(first_ckpt["model_state_dict"])
+    dataset_stats = first_ckpt.get("dataset_stats", None)
+    policy = SoftEquiDiffPolicy(config, dataset_stats=dataset_stats).to(device)
+    policy.load_state_dict(first_ckpt["model_state_dict"], strict=False)
     free_norms = analyze_free_weights(policy)
 
     if wandb_run is not None:
