@@ -18,15 +18,20 @@ Usage:
         --labels "EquiDiff-exact,SoftEqui-step" \
         --n_episodes 50 --device cuda
 
+    # Print generated actions + save a behaviour GIF:
+    python -m soft_equidiff.eval_success_rate \
+        --checkpoint outputs/run_a/policy_step0200000.pt \
+        --print_actions --gif_fps 15 --save_dir /tmp/evals
+
     # Disable wandb:
     python -m soft_equidiff.eval_success_rate --checkpoint ... --no_wandb
 
 Requires:
     pip install gym_pusht gymnasium
+    pip install imageio          # for GIF export (optional)
 """
 
 import argparse
-import random
 from pathlib import Path
 
 import numpy as np
@@ -69,7 +74,6 @@ def obs_to_batch(obs: dict, device: torch.device, obs_buffer: list, n_obs_steps:
         "observation.image" — (1, n_obs_steps, 3, H, W) float32
         "observation.state" — (1, n_obs_steps, 2)       float32
     """
-    # Stack obs frames (oldest first)
     images = []
     states = []
     for o in obs_buffer:
@@ -87,41 +91,73 @@ def obs_to_batch(obs: dict, device: torch.device, obs_buffer: list, n_obs_steps:
 
 
 def run_episode(
-    policy: SoftEquiDiffPolicy,
+    policy,
     env,
     seed: int,
     max_steps: int = 300,
     device: torch.device = torch.device("cpu"),
     success_threshold: float = 0.95,
+    record: bool = False,
+    print_actions: bool = False,
 ) -> dict:
     """
     Run a single Push-T episode.
 
+    Args:
+        record:        if True, collect rendered frames and actions for GIF / logging
+        print_actions: if True, print each action as it is executed
+
     Returns:
-        dict with keys: "success" (bool), "coverage" (float), "n_steps" (int)
+        dict with keys:
+            "success"   — bool
+            "coverage"  — float (max coverage seen)
+            "n_steps"   — int
+        If record=True, also:
+            "frames"    — list of (H, W, 3) uint8 arrays (one per step)
+            "actions"   — list of (2,) float32 arrays (unnormalised workspace coords)
+            "agent_pos" — list of (2,) float32 arrays (agent position at each step)
+            "coverages" — list of float (per-step coverage)
     """
     n_obs_steps = policy.config.n_obs_steps
     policy.reset()
 
     obs, _ = env.reset(seed=seed)
 
-    # Pre-fill the obs buffer by repeating the first frame
     obs_buffer = [obs] * n_obs_steps
 
     max_coverage = 0.0
 
+    frames    = [] if record else None
+    actions   = [] if record else None
+    agent_pos = [] if record else None
+    cov_trace = [] if record else None
+
     for step in range(max_steps):
+        # Capture frame BEFORE the step so the GIF shows the state the policy saw
+        if record:
+            frames.append(obs["pixels"].copy())
+            agent_pos.append(obs["agent_pos"].copy())
+
         batch = obs_to_batch(obs, device, obs_buffer, n_obs_steps)
-        action = policy.select_action(batch)  # (2,)
+        action = policy.select_action(batch)  # (2,) unnormalised workspace coords
         action_np = action.cpu().numpy()
+
+        if print_actions:
+            pos = obs["agent_pos"]
+            print(f"    step {step:4d}  agent=({pos[0]:7.1f},{pos[1]:7.1f})  "
+                  f"action=({action_np[0]:7.1f},{action_np[1]:7.1f})")
+
+        if record:
+            actions.append(action_np.copy())
 
         obs, reward, terminated, truncated, info = env.step(action_np)
 
-        # Push-T reports coverage in info
         coverage = info.get("coverage", 0.0)
         max_coverage = max(max_coverage, coverage)
 
-        # Update obs buffer (slide window)
+        if record:
+            cov_trace.append(coverage)
+
         obs_buffer.pop(0)
         obs_buffer.append(obs)
 
@@ -129,7 +165,68 @@ def run_episode(
             break
 
     success = max_coverage >= success_threshold
-    return {"success": success, "coverage": max_coverage, "n_steps": step + 1}
+    result = {
+        "success":  success,
+        "coverage": max_coverage,
+        "n_steps":  step + 1,
+    }
+    if record:
+        # Append the final frame so the GIF ends on the terminal state
+        frames.append(obs["pixels"].copy())
+        result["frames"]    = frames
+        result["actions"]   = np.array(actions)    # (T, 2)
+        result["agent_pos"] = np.array(agent_pos)  # (T, 2)
+        result["coverages"] = np.array(cov_trace)  # (T,)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# GIF helpers
+# ---------------------------------------------------------------------------
+
+def save_gif(frames: list, path: Path, fps: int = 10) -> bool:
+    """
+    Save a list of (H, W, 3) uint8 arrays as an animated GIF.
+
+    Returns True on success, False if imageio is missing.
+    """
+    try:
+        import imageio.v2 as iio
+    except ImportError:
+        try:
+            import imageio as iio
+        except ImportError:
+            print("  [gif] imageio not installed — skipping GIF. "
+                  "Install with: pip install imageio")
+            return False
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    iio.mimsave(str(path), frames, fps=fps, loop=0)
+    print(f"  [gif] saved → {path}  ({len(frames)} frames @ {fps} fps)")
+    return True
+
+
+def print_action_summary(actions: np.ndarray, agent_pos: np.ndarray, coverages: np.ndarray):
+    """Print a compact statistical summary of actions generated during an episode."""
+    print("  Action statistics (workspace coordinates):")
+    print(f"    x  — min={actions[:,0].min():.1f}  max={actions[:,0].max():.1f}  "
+          f"mean={actions[:,0].mean():.1f}  std={actions[:,0].std():.1f}")
+    print(f"    y  — min={actions[:,1].min():.1f}  max={actions[:,1].max():.1f}  "
+          f"mean={actions[:,1].mean():.1f}  std={actions[:,1].std():.1f}")
+    print(f"  Agent-pos statistics:")
+    print(f"    x  — min={agent_pos[:,0].min():.1f}  max={agent_pos[:,0].max():.1f}  "
+          f"mean={agent_pos[:,0].mean():.1f}  std={agent_pos[:,0].std():.1f}")
+    print(f"    y  — min={agent_pos[:,1].min():.1f}  max={agent_pos[:,1].max():.1f}  "
+          f"mean={agent_pos[:,1].mean():.1f}  std={agent_pos[:,1].std():.1f}")
+    # Detect degenerate case: actions clustered tightly (std < 20 world units ≈ 3.75% of 512)
+    action_std = actions.std(axis=0).mean()
+    if action_std < 20.0:
+        print(f"  ⚠  LOW ACTION DIVERSITY (mean std={action_std:.1f}) — "
+              f"model may be outputting near-constant actions (degenerate decoder?)")
+    peak_cov = coverages.max() if len(coverages) else 0.0
+    print(f"  Peak coverage during episode: {peak_cov:.3f}")
 
 
 # ---------------------------------------------------------------------------
@@ -143,18 +240,24 @@ def evaluate_checkpoint(
     device: torch.device = torch.device("cpu"),
     base_seed: int = 42,
     success_threshold: float = 0.95,
+    gif_save_path: Path = None,
+    gif_fps: int = 10,
+    print_actions: bool = False,
 ) -> dict:
     """
     Load a checkpoint and evaluate over n_episodes rollouts.
 
+    If gif_save_path is given, records episode 0 (base_seed) and saves a GIF there.
+    If print_actions is True, prints every action in that same recorded episode.
+
     Returns:
         dict with "success_rate", "mean_coverage", "std_coverage",
-                  "successes" (list of bool), "coverages" (list of float)
+                  "successes", "coverages",
+                  "gif_path" (Path or None)
     """
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     config = ckpt["config"]
 
-    # Pass dataset_stats so the normalizer is created before loading state_dict
     dataset_stats = ckpt.get("dataset_stats", None)
     if isinstance(config, BaseDiffConfig):
         policy = BaseDiffPolicy(config, dataset_stats=dataset_stats).to(device)
@@ -170,13 +273,34 @@ def evaluate_checkpoint(
 
     successes = []
     coverages = []
+    saved_gif_path = None
 
     for i in range(n_episodes):
         seed = base_seed + i
-        result = run_episode(policy, env, seed=seed, max_steps=max_steps,
-                             device=device, success_threshold=success_threshold)
+        # Record the FIRST episode for GIF / action printing
+        record_this = (i == 0) and (gif_save_path is not None or print_actions)
+
+        result = run_episode(
+            policy, env, seed=seed,
+            max_steps=max_steps,
+            device=device,
+            success_threshold=success_threshold,
+            record=record_this,
+            print_actions=(print_actions and record_this),
+        )
         successes.append(result["success"])
         coverages.append(result["coverage"])
+
+        if record_this:
+            print(f"  Episode 0 (seed={seed}):  "
+                  f"success={result['success']}  coverage={result['coverage']:.3f}  "
+                  f"steps={result['n_steps']}")
+            print_action_summary(result["actions"], result["agent_pos"], result["coverages"])
+
+            if gif_save_path is not None:
+                ok = save_gif(result["frames"], gif_save_path, fps=gif_fps)
+                if ok:
+                    saved_gif_path = gif_save_path
 
         if (i + 1) % 10 == 0:
             sr_so_far = np.mean(successes)
@@ -186,11 +310,12 @@ def evaluate_checkpoint(
     env.close()
 
     return {
-        "success_rate": float(np.mean(successes)),
+        "success_rate":  float(np.mean(successes)),
         "mean_coverage": float(np.mean(coverages)),
-        "std_coverage": float(np.std(coverages)),
-        "successes": successes,
-        "coverages": coverages,
+        "std_coverage":  float(np.std(coverages)),
+        "successes":     successes,
+        "coverages":     coverages,
+        "gif_path":      saved_gif_path,
     }
 
 
@@ -212,7 +337,20 @@ def parse_args():
                    help="Coverage threshold to count as success (default: 0.95)")
     p.add_argument("--base_seed", type=int, default=42)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--save_dir", default=".")
+    p.add_argument("--save_dir", default=".",
+                   help="Directory to save GIFs and artefacts")
+
+    # Action printing
+    p.add_argument("--print_actions", action="store_true",
+                   help="Print every action generated in the first recorded episode. "
+                        "Also prints per-episode action statistics. "
+                        "Useful for diagnosing degenerate / constant-action policies.")
+
+    # GIF
+    p.add_argument("--no_gif", action="store_true",
+                   help="Disable GIF recording (default: record one episode per checkpoint)")
+    p.add_argument("--gif_fps", type=int, default=10,
+                   help="Frames per second for the output GIF (default: 10)")
 
     # Wandb
     p.add_argument("--wandb_project", default="soft-equidiff-pusht")
@@ -253,6 +391,7 @@ def main():
                     "success_threshold": args.success_threshold,
                     "base_seed": args.base_seed,
                     "device": str(device),
+                    "gif_fps": args.gif_fps,
                 },
             )
         except ImportError:
@@ -265,6 +404,12 @@ def main():
         print(f"  Checkpoint: {ckpt_path}")
         print(f"  Episodes:   {args.n_episodes}")
 
+        # Build GIF path: <save_dir>/<label>_ep0.gif
+        gif_path = None
+        if not args.no_gif:
+            safe_label = label.replace(" ", "_").replace("/", "_")
+            gif_path = save_dir / f"{safe_label}_ep0.gif"
+
         results = evaluate_checkpoint(
             checkpoint_path=ckpt_path,
             n_episodes=args.n_episodes,
@@ -272,6 +417,9 @@ def main():
             device=device,
             base_seed=args.base_seed,
             success_threshold=args.success_threshold,
+            gif_save_path=gif_path,
+            gif_fps=args.gif_fps,
+            print_actions=args.print_actions,
         )
         all_results[label] = results
 
@@ -283,15 +431,31 @@ def main():
         if wandb_run is not None:
             import wandb as wb
             safe_label = label.replace(" ", "_").replace("-", "_")
+
             wandb_run.summary[f"{safe_label}/success_rate"] = results["success_rate"]
             wandb_run.summary[f"{safe_label}/mean_coverage"] = results["mean_coverage"]
             wandb_run.summary[f"{safe_label}/std_coverage"] = results["std_coverage"]
 
-            # Log per-episode coverage as a table for distribution analysis
+            # Per-episode coverage table
             cov_table = wb.Table(columns=["episode", "coverage", "success"])
             for i, (cov, suc) in enumerate(zip(results["coverages"], results["successes"])):
                 cov_table.add_data(i, cov, int(suc))
             wandb_run.log({f"{safe_label}/episode_coverages": cov_table})
+
+            # Upload GIF if it was saved
+            if results["gif_path"] is not None:
+                try:
+                    gif_video = wb.Video(
+                        str(results["gif_path"]),
+                        fps=args.gif_fps,
+                        format="gif",
+                        caption=f"{label} — seed={args.base_seed}  "
+                                f"coverage={results['coverages'][0]:.3f}",
+                    )
+                    wandb_run.log({f"{safe_label}/episode_gif": gif_video})
+                    print(f"  [wandb] uploaded GIF for {label}")
+                except Exception as e:
+                    print(f"  [wandb] GIF upload failed: {e}")
 
     # --- Summary table ---
     print("\n--- Success Rate Summary ---")
@@ -302,7 +466,6 @@ def main():
               f"{results['mean_coverage']:>14.3f}  {results['std_coverage']:>12.3f}")
 
     if wandb_run is not None:
-        # Summary comparison table
         import wandb as wb
         summary_table = wb.Table(
             columns=["method", "success_rate", "mean_coverage", "std_coverage"]

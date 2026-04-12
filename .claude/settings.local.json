@@ -13,7 +13,16 @@
       "Read(//private/tmp/equidiff/equi_diffpo/**)",
       "Bash(curl -L -A \"Mozilla/5.0\" \"https://raw.githubusercontent.com/huggingface/lerobot/main/src/lerobot/common/policies/diffusion/modeling_diffusion.py\" -o /tmp/modeling_diffusion.py)",
       "Read(//private/tmp/**)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl -s https://raw.githubusercontent.com/pointW/equidiff/main/equi_diffpo/policy/diffusion_equi_unet_cnn_enc_policy.py)",
+      "Bash(curl -s https://raw.githubusercontent.com/pointW/equidiff/main/equi_diffpo/model/equi/equi_obs_encoder.py)",
+      "Bash(curl -s https://raw.githubusercontent.com/pointW/equidiff/main/equi_diffpo/model/equi/equi_conditional_unet1d.py)",
+      "Bash(curl -s https://raw.githubusercontent.com/pointW/equidiff/main/equi_diffpo/dataset/robomimic_replay_lowdim_dataset.py)",
+      "Bash(curl -s https://raw.githubusercontent.com/pointW/equidiff/main/equi_diffpo/common/normalize_util.py)",
+      "Bash(curl -s https://raw.githubusercontent.com/pointW/equidiff/main/equi_diffpo/workspace/train_equi_workspace.py)"
     ]
   }
 }
