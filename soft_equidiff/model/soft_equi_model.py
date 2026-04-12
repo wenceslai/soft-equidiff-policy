@@ -162,8 +162,27 @@ class SoftEquiDiffModel(nn.Module):
         noise_emb = self.unet(act_feat, timestep_expanded, global_cond=obs_cond)
         # noise_emb: (B*N, horizon, action_features)
 
+        # --- Degeneracy diagnostics (cheap, stored for optional wandb logging) ---
+        # Reshape to (B, N, horizon, action_features) to measure inter-group variation.
+        # If inter_group_var ≈ 0, all N UNet outputs are equal → decoder output ≈ 0 (symmetric collapse).
+        with torch.no_grad():
+            ne = noise_emb.detach().reshape(B, self.N, self.horizon, -1)
+            # Variance across group elements (dim=1), averaged over all other dims.
+            self._last_diagnostics = {
+                # Near 0 → UNet outputs are identical across group elements (degenerate).
+                "debug/unet_inter_group_var": ne.var(dim=1).mean().item(),
+                # Overall magnitude of UNet outputs.
+                "debug/unet_output_norm": ne.norm(dim=-1).mean().item(),
+            }
+
         # Decode to action-space noise: (B, horizon, 2)
-        return self.decoder(noise_emb)
+        noise_pred = self.decoder(noise_emb)
+
+        # Magnitude of the final predicted noise (should be ~1 if learning well).
+        with torch.no_grad():
+            self._last_diagnostics["debug/noise_pred_norm"] = noise_pred.detach().norm(dim=-1).mean().item()
+
+        return noise_pred
 
     def get_total_free_weight_norm(self) -> torch.Tensor:
         """Sum of ||W_free||² across all SoftEquiWrapper layers (for equivariance penalty)."""

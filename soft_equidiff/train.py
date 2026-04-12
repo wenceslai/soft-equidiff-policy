@@ -373,7 +373,7 @@ def train(args):
             )
 
             if use_wandb:
-                wandb.log({
+                log_dict = {
                     "train/loss":         losses["loss"].item(),
                     "train/mse_loss":     losses["mse_loss"].item(),
                     "train/equi_penalty": losses["equi_penalty"].item(),
@@ -381,7 +381,12 @@ def train(args):
                     "train/grad_norm":    grad_norm,
                     "train/steps_per_sec": steps_per_sec,
                     "train/elapsed_sec":  elapsed,
-                }, step=step)
+                }
+                # Degeneracy diagnostics: read side-channel written by model.forward()
+                # debug/unet_inter_group_var ≈ 0 → symmetric collapse (decoder outputs ≈ 0)
+                if hasattr(policy.model, "_last_diagnostics"):
+                    log_dict.update(policy.model._last_diagnostics)
+                wandb.log(log_dict, step=step)
 
         if step % args.val_every == 0:
             val_mse = _compute_val_loss(policy, val_loader, device, n_batches=args.val_batches)
