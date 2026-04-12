@@ -187,7 +187,7 @@ def plot_equivariance_vs_step(
 
     for label, ckpt_path in checkpoints.items():
         print(f"Loading {label} from {ckpt_path}")
-        ckpt = torch.load(ckpt_path, map_location=device)
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
         config = ckpt["config"]
         policy = SoftEquiDiffPolicy(config).to(device)
         policy.load_state_dict(ckpt["model_state_dict"])
@@ -277,7 +277,7 @@ def main():
     checkpoints = dict(zip(labels, ckpt_paths))
 
     # Load first checkpoint's config for dataset setup
-    first_ckpt = torch.load(ckpt_paths[0], map_location=device)
+    first_ckpt = torch.load(ckpt_paths[0], map_location=device, weights_only=False)
     config = first_ckpt["config"]
 
     # --- Wandb init ---
