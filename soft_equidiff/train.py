@@ -57,6 +57,8 @@ def parse_args():
     p.add_argument("--num_steps", type=int, default=200_000)
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--lr", type=float, default=1e-4)
+    p.add_argument("--weight_decay", type=float, default=1e-6,
+                   help="AdamW weight decay (default 1e-6; try 1e-4 or 1e-3 to combat overfitting)")
     p.add_argument("--log_every", type=int, default=500)
     p.add_argument("--save_every", type=int, default=25_000)
     p.add_argument("--val_every", type=int, default=10_000,
@@ -234,6 +236,7 @@ def train(args):
         num_train_steps=args.num_steps,
         batch_size=args.batch_size,
         lr=args.lr,
+        weight_decay=args.weight_decay,
         camera_tilt_degrees=args.tilt_degrees,
     )
 
@@ -263,6 +266,7 @@ def train(args):
                     "soften_decoder": config.soften_decoder,
                     "tilt_degrees": config.camera_tilt_degrees,
                     "lr": config.lr,
+                    "weight_decay": config.weight_decay,
                     "batch_size": config.batch_size,
                     "unet_down_dims": config.unet_down_dims,
                 },
