@@ -501,6 +501,14 @@ def main():
             import wandb as wb
             safe_label = label.replace(" ", "_").replace("-", "_")
 
+            # Extract step number from checkpoint filename (e.g. policy_step0200000.pt → 200000)
+            ckpt_stem = Path(ckpt_path).stem  # e.g. "policy_step0200000"
+            import re as _re
+            step_match = _re.search(r"step(\d+)", ckpt_stem)
+            ckpt_step = int(step_match.group(1)) if step_match else -1
+
+            wandb_run.summary[f"{safe_label}/checkpoint_path"] = ckpt_path
+            wandb_run.summary[f"{safe_label}/checkpoint_step"] = ckpt_step
             wandb_run.summary[f"{safe_label}/success_rate"] = results["success_rate"]
             wandb_run.summary[f"{safe_label}/mean_coverage"] = results["mean_coverage"]
             wandb_run.summary[f"{safe_label}/std_coverage"] = results["std_coverage"]
