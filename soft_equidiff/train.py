@@ -340,22 +340,28 @@ def train(args):
     t0 = time.time()
     step_t0 = t0
 
+    _t_data_total = 0.0
+    _t_fwd_total = 0.0
+
     for step in range(start_step, config.num_train_steps + 1):
+        _t = time.time()
         try:
             batch = next(data_iter)
         except StopIteration:
             print("DataLoader ran out of data, restarting...")
             data_iter = iter(dataloader)
             batch = next(data_iter)
-
         batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+        _t_data_total += time.time() - _t
 
         if rot_aug is not None:
             batch = rot_aug(batch)
 
+        _t = time.time()
         optimizer.zero_grad()
         losses = policy(batch)
         losses["loss"].backward()
+        _t_fwd_total += time.time() - _t
 
         grad_norm = _grad_norm(policy)
         torch.nn.utils.clip_grad_norm_(policy.parameters(), config.grad_clip_norm)
@@ -366,6 +372,7 @@ def train(args):
             steps_per_sec = args.log_every / (time.time() - step_t0)
             step_t0 = time.time()
 
+            _pct_data = 100 * _t_data_total / (_t_data_total + _t_fwd_total + 1e-9)
             print(
                 f"step {step:>7d} | loss {losses['loss'].item():.4f} "
                 f"| mse {losses['mse_loss'].item():.4f} "
@@ -373,8 +380,11 @@ def train(args):
                 f"| λ {losses['lambda'].item():.4f} "
                 f"| grad {grad_norm:.3f} "
                 f"| {steps_per_sec:.1f} steps/s "
+                f"| data {_t_data_total:.1f}s  fwd {_t_fwd_total:.1f}s  ({_pct_data:.0f}% data)"
                 f"| {elapsed:.0f}s elapsed"
             )
+            _t_data_total = 0.0
+            _t_fwd_total = 0.0
 
             if use_wandb:
                 log_dict = {
