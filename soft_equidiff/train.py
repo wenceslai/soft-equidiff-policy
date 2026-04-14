@@ -59,6 +59,8 @@ def parse_args():
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--weight_decay", type=float, default=1e-6,
                    help="AdamW weight decay (default 1e-6; try 1e-4 or 1e-3 to combat overfitting)")
+    p.add_argument("--mixed_precision", action="store_true",
+                   help="Use bfloat16 autocast for forward/backward (2-4x speedup on L40S/A100/H100)")
     p.add_argument("--log_every", type=int, default=500)
     p.add_argument("--save_every", type=int, default=25_000)
     p.add_argument("--val_every", type=int, default=10_000,
@@ -187,7 +189,7 @@ def build_dataset(
 
 
 @torch.no_grad()
-def _compute_val_loss(policy, val_loader, device, n_batches: int) -> float:
+def _compute_val_loss(policy, val_loader, device, n_batches: int, use_amp: bool = False) -> float:
     """
     Average MSE loss over up to `n_batches` batches from the val dataloader.
     Switches policy to eval mode and back to train mode afterwards.
@@ -199,7 +201,8 @@ def _compute_val_loss(policy, val_loader, device, n_batches: int) -> float:
         if count >= n_batches:
             break
         batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
-        losses = policy(batch)
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+            losses = policy(batch)
         total_mse += losses["mse_loss"].item()
         count += 1
     policy.train()
@@ -335,6 +338,9 @@ def train(args):
         drop_last=False,
     )
     data_iter = iter(dataloader)
+    use_amp = args.mixed_precision and device.type == "cuda"
+    if use_amp:
+        print("  Mixed precision: bfloat16 autocast enabled")
 
     policy.train()
     t0 = time.time()
@@ -359,7 +365,8 @@ def train(args):
 
         _t = time.time()
         optimizer.zero_grad()
-        losses = policy(batch)
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+            losses = policy(batch)
         losses["loss"].backward()
         _t_fwd_total += time.time() - _t
 
@@ -403,7 +410,7 @@ def train(args):
                 wandb.log(log_dict, step=step)
 
         if step % args.val_every == 0:
-            val_mse = _compute_val_loss(policy, val_loader, device, n_batches=args.val_batches)
+            val_mse = _compute_val_loss(policy, val_loader, device, n_batches=args.val_batches, use_amp=use_amp)
             print(f"step {step:>7d} | val/mse_loss {val_mse:.4f}")
             if use_wandb:
                 wandb.log({"val/mse_loss": val_mse}, step=step)
