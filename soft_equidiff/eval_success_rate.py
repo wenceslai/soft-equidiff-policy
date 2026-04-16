@@ -39,6 +39,7 @@ import numpy as np
 import torch
 
 from .baseline_diffusion import BaseDiffConfig, BaseDiffPolicy
+from .camera_tilt import apply_camera_tilt
 from .config import SoftEquiDiffConfig
 from .policy import SoftEquiDiffPolicy
 
@@ -94,7 +95,7 @@ def make_env(seed: int = 0):
 
 
 def obs_to_batch(obs: dict, device: torch.device, obs_buffer: list, n_obs_steps: int,
-                 test_rotation: int = 0) -> dict:
+                 test_rotation: int = 0, tilt_degrees: float = 0.0) -> dict:
     """
     Convert a gymnasium obs dict to a policy batch dict.
 
@@ -116,6 +117,8 @@ def obs_to_batch(obs: dict, device: torch.device, obs_buffer: list, n_obs_steps:
     states = []
     for o in obs_buffer:
         img = torch.from_numpy(o["pixels"]).permute(2, 0, 1).float()  # (3, H, W)
+        if tilt_degrees:
+            img = apply_camera_tilt(img.unsqueeze(0), tilt_degrees).squeeze(0)
         if test_rotation:
             img = torch.rot90(img, k=test_rotation, dims=[-2, -1])
         images.append(img)
@@ -144,6 +147,7 @@ def run_episode(
     record: bool = False,
     print_actions: bool = False,
     test_rotation: int = 0,
+    tilt_degrees: float = 0.0,
 ) -> dict:
     """
     Run a single Push-T episode.
@@ -184,7 +188,7 @@ def run_episode(
             agent_pos.append(obs["agent_pos"].copy())
 
         batch = obs_to_batch(obs, device, obs_buffer, n_obs_steps,
-                             test_rotation=test_rotation)
+                             test_rotation=test_rotation, tilt_degrees=tilt_degrees)
         action = policy.select_action(batch)  # (2,) in (possibly rotated) workspace coords
         action_np = action.cpu().numpy()
 
@@ -302,6 +306,7 @@ def evaluate_checkpoint(
     gif_fps: int = 10,
     print_actions: bool = False,
     test_rotation: int = 0,
+    tilt_degrees: float = 0.0,
 ) -> dict:
     """
     Load a checkpoint and evaluate over n_episodes rollouts.
@@ -347,6 +352,7 @@ def evaluate_checkpoint(
             record=record_this,
             print_actions=(print_actions and record_this),
             test_rotation=test_rotation,
+            tilt_degrees=tilt_degrees,
         )
         successes.append(result["success"])
         coverages.append(result["coverage"])
@@ -404,6 +410,11 @@ def parse_args():
     p.add_argument("--test_rotation", type=int, default=0, choices=[0, 1, 2, 3],
                    help="Rotate observations by N×90° at test time and unrotate actions before "
                         "execution. 0=none, 1=90°, 2=180°, 3=270°. Tests equivariance robustness.")
+
+    # Camera tilt
+    p.add_argument("--tilt_degrees", type=float, default=0.0,
+                   help="Apply camera tilt warp to observations at eval time (e.g. 20.0). "
+                        "Should match the --tilt_degrees used during training.")
 
     # Action printing
     p.add_argument("--print_actions", action="store_true",
@@ -477,6 +488,8 @@ def main():
 
         if args.test_rotation:
             print(f"  Test-time rotation: {args.test_rotation}×90° = {args.test_rotation*90}°")
+        if args.tilt_degrees:
+            print(f"  Camera tilt: {args.tilt_degrees}°")
 
         results = evaluate_checkpoint(
             checkpoint_path=ckpt_path,
@@ -489,6 +502,7 @@ def main():
             gif_fps=args.gif_fps,
             print_actions=args.print_actions,
             test_rotation=args.test_rotation,
+            tilt_degrees=args.tilt_degrees,
         )
         all_results[label] = results
 
