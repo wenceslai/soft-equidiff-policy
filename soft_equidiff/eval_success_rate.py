@@ -117,10 +117,10 @@ def obs_to_batch(obs: dict, device: torch.device, obs_buffer: list, n_obs_steps:
     states = []
     for o in obs_buffer:
         img = torch.from_numpy(o["pixels"]).permute(2, 0, 1).float()  # (3, H, W)
-        if tilt_degrees:
-            img = apply_camera_tilt(img.unsqueeze(0), tilt_degrees).squeeze(0)
         if test_rotation:
             img = torch.rot90(img, k=test_rotation, dims=[-2, -1])
+        if tilt_degrees:
+            img = apply_camera_tilt(img.unsqueeze(0), tilt_degrees).squeeze(0)
         images.append(img)
 
         pos = o["agent_pos"].copy()
@@ -148,6 +148,7 @@ def run_episode(
     print_actions: bool = False,
     test_rotation: int = 0,
     tilt_degrees: float = 0.0,
+    rot_aug: bool = False,
 ) -> dict:
     """
     Run a single Push-T episode.
@@ -171,6 +172,11 @@ def run_episode(
     policy.reset()
 
     obs, _ = env.reset(seed=seed)
+
+    # If rot_aug, pick a random C4 rotation for this episode (overrides test_rotation)
+    if rot_aug:
+        rng = np.random.default_rng(seed)
+        test_rotation = int(rng.integers(0, 4))
 
     obs_buffer = [obs] * n_obs_steps
 
@@ -307,6 +313,7 @@ def evaluate_checkpoint(
     print_actions: bool = False,
     test_rotation: int = 0,
     tilt_degrees: float = 0.0,
+    rot_aug: bool = False,
 ) -> dict:
     """
     Load a checkpoint and evaluate over n_episodes rollouts.
@@ -353,6 +360,7 @@ def evaluate_checkpoint(
             print_actions=(print_actions and record_this),
             test_rotation=test_rotation,
             tilt_degrees=tilt_degrees,
+            rot_aug=rot_aug,
         )
         successes.append(result["success"])
         coverages.append(result["coverage"])
@@ -410,6 +418,9 @@ def parse_args():
     p.add_argument("--test_rotation", type=int, default=0, choices=[0, 1, 2, 3],
                    help="Rotate observations by N×90° at test time and unrotate actions before "
                         "execution. 0=none, 1=90°, 2=180°, 3=270°. Tests equivariance robustness.")
+    p.add_argument("--rot_aug", action="store_true",
+                   help="Apply random C4 rotation per episode (same as training augmentation). "
+                        "Overrides --test_rotation. Tests robustness across all 4 orientations.")
 
     # Camera tilt
     p.add_argument("--tilt_degrees", type=float, default=0.0,
@@ -486,7 +497,9 @@ def main():
             safe_label = label.replace(" ", "_").replace("/", "_")
             gif_path = save_dir / f"{safe_label}_ep0.gif"
 
-        if args.test_rotation:
+        if args.rot_aug:
+            print(f"  Rotation augmentation: random C4 per episode")
+        elif args.test_rotation:
             print(f"  Test-time rotation: {args.test_rotation}×90° = {args.test_rotation*90}°")
         if args.tilt_degrees:
             print(f"  Camera tilt: {args.tilt_degrees}°")
@@ -503,6 +516,7 @@ def main():
             print_actions=args.print_actions,
             test_rotation=args.test_rotation,
             tilt_degrees=args.tilt_degrees,
+            rot_aug=args.rot_aug,
         )
         all_results[label] = results
 
