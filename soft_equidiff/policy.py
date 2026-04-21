@@ -2,11 +2,6 @@
 SoftEquiDiffPolicy — LeRobot-compatible policy wrapping SoftEquiDiffModel.
 
 Implements the training loss (forward) and inference denoising loop (select_action).
-
-Batch keys expected (Push-T / LeRobot format):
-    batch["observation.image"]  — (B, n_obs_steps, 3, H, W)  or  (B, 3, H, W)
-    batch["observation.state"]  — (B, n_obs_steps, 2)         or  (B, 2)
-    batch["action"]             — (B, horizon, 2)
 """
 
 from __future__ import annotations

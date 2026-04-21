@@ -3,11 +3,6 @@ Soft equivariance mechanism: Residual Pathway Prior (RPP).
 
 For any escnn layer L, the soft wrapper computes:
     output = L(x_geometric).tensor + W_free(x_raw)
-
-The free path W_free is initialized near zero (starts equivariant) and is
-penalized during training via EquivariancePenaltySchedule.
-
-Reference: Finzi, Benton & Wilson, "Residual Pathway Priors", NeurIPS 2021.
 """
 
 import torch

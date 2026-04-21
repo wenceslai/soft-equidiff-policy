@@ -1,26 +1,5 @@
 """
 Training script for SoftEquiDiffPolicy on Push-T.
-
-Usage:
-    python -m soft_equidiff.train [OPTIONS]
-
-    # Exact equivariance (baseline — recovers EquiDiff):
-    python -m soft_equidiff.train --penalty_mode constant --lambda_base 1000.0 --run_name equidiff_exact
-
-    # Constant soft penalty:
-    python -m soft_equidiff.train --penalty_mode constant --lambda_base 0.1 --run_name soft_constant
-
-    # Step-dependent soft penalty (novel):
-    python -m soft_equidiff.train --penalty_mode step_dependent --lambda_base 0.1 --run_name soft_step
-
-    # With camera tilt:
-    python -m soft_equidiff.train --tilt_degrees 30 --run_name soft_step_tilt30
-
-    # Disable wandb:
-    python -m soft_equidiff.train --no_wandb
-
-Requires:
-    pip install lerobot escnn einops diffusers torch wandb
 """
 
 import argparse
