@@ -22,7 +22,13 @@
       "Bash(curl -s https://raw.githubusercontent.com/pointW/equidiff/main/equi_diffpo/model/equi/equi_conditional_unet1d.py)",
       "Bash(curl -s https://raw.githubusercontent.com/pointW/equidiff/main/equi_diffpo/dataset/robomimic_replay_lowdim_dataset.py)",
       "Bash(curl -s https://raw.githubusercontent.com/pointW/equidiff/main/equi_diffpo/common/normalize_util.py)",
-      "Bash(curl -s https://raw.githubusercontent.com/pointW/equidiff/main/equi_diffpo/workspace/train_equi_workspace.py)"
+      "Bash(curl -s https://raw.githubusercontent.com/pointW/equidiff/main/equi_diffpo/workspace/train_equi_workspace.py)",
+      "WebFetch(domain:equidiff.github.io)",
+      "WebSearch",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:www.aimodels.fyi)",
+      "WebFetch(domain:proceedings.mlr.press)",
+      "WebFetch(domain:proceedings.neurips.cc)"
     ]
   }
 }

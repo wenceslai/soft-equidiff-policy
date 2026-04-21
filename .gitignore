@@ -1,6 +1,11 @@
-.claude
+.claude/*
 .vscode
+.venv
 *.sbatch
 CLAUDE.md
 report/*
-
+temp/*
+experiments/*
+.DS_Store
+soft_equidiff/__pycache__
+soft_equidiff/model/__pycache__
