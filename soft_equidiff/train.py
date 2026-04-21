@@ -30,7 +30,6 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from .augmentation import C4Augmentation
 from .config import SoftEquiDiffConfig
 from .policy import SoftEquiDiffPolicy
 from .camera_tilt import make_tilt_transform
@@ -80,11 +79,6 @@ def parse_args():
     p.add_argument("--unet_down_dims", type=int, nargs="+", default=[256, 512, 1024],
                    help="U-Net encoder channel widths, e.g. --unet_down_dims 64 128 256")
 
-    # Rotation augmentation
-    p.add_argument("--rot_aug", action="store_true",
-                   help="Apply C₄ rotation augmentation (rotate image+state+action together). "
-                        "Use with --N 4 so the model group order matches the augmentation.")
-
     # Dataset
     p.add_argument("--video_backend", default="pyav", choices=["pyav", "torchcodec"],
                    help="LeRobot video decode backend (default: pyav, works everywhere)")
@@ -120,8 +114,7 @@ def build_dataset(
             from lerobot.datasets.lerobot_dataset import LeRobotDataset
     except ImportError:
         raise ImportError(
-            "LeRobot not found. Install with:\n"
-            "  git clone https://github.com/huggingface/lerobot && cd lerobot && pip install -e ."
+            "LeRobot not found."
         )
 
     delta_ts = {
@@ -160,7 +153,7 @@ def build_dataset(
 
     # Equivariant normalization: x and y must use the same scale so that
     # normalized vectors remain proper 2D Euclidean vectors under irrep(1).
-    # Per-component min-max would distort rotations if x_range ≠ y_range.
+    # Per-component min-max would distort rotations if x_range != y_range.
     for key in ["observation.state", "action"]:
         lo = torch.as_tensor(stats[key]["min"]).float().clone()
         hi = torch.as_tensor(stats[key]["max"]).float().clone()
@@ -287,19 +280,6 @@ def train(args):
         config, tilt_transform, video_backend=args.video_backend
     )
 
-    # C₄ rotation augmentation — instantiated once, applied per batch on GPU.
-    # Workspace center is derived from the isotropic-normalised stats so that
-    # the rotation pivot matches the geometric centre of the coordinate space.
-    rot_aug = None
-    if args.rot_aug:
-        # Use the geometric center of the workspace (256, 256), which corresponds to
-        # the image center (47.5, 47.5) in the 96×96 rendering of the 512×512 workspace.
-        # The stats-derived center is biased by where the agent spends time (~272 in y),
-        # not by the image rotation pivot — using it would misalign image vs. coordinate rotations.
-        ws_center = torch.tensor([256.0, 256.0])
-        rot_aug = C4Augmentation(ws_center)
-        print(f"  C₄ rotation augmentation enabled  (workspace center: {ws_center.tolist()})")
-
     policy = SoftEquiDiffPolicy(config, dataset_stats=stats).to(device)
     optimizer = torch.optim.AdamW(policy.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
@@ -359,9 +339,6 @@ def train(args):
             batch = next(data_iter)
         batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
         _t_data_total += time.time() - _t
-
-        if rot_aug is not None:
-            batch = rot_aug(batch)
 
         _t = time.time()
         optimizer.zero_grad()
