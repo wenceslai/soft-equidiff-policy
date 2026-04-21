@@ -1,12 +1,5 @@
 """
 Configuration dataclass for SoftEquiDiffPolicy.
-
-All hyperparameters in one place. The three experimental conditions from the
-paper map to:
-
-    EquiDiff-exact:       penalty_mode="constant",       lambda_base=1000.0
-    SoftEqui-constant:    penalty_mode="constant",       lambda_base=0.1
-    SoftEqui-step:        penalty_mode="step_dependent", lambda_base=0.1  (novel)
 """
 
 from dataclasses import dataclass, field

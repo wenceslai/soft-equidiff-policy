@@ -5,30 +5,6 @@ Loads one or more checkpoints, runs N rollout episodes per checkpoint in the
 Push-T gym environment, and reports mean success rate ± std.
 
 Success criterion (standard Push-T): coverage of T-block target area >= 0.95.
-
-Usage:
-    # Single checkpoint:
-    python -m soft_equidiff.eval_success_rate \
-        --checkpoint outputs/baseline_no_softening/policy_step0200000.pt \
-        --n_episodes 50 --device cuda
-
-    # Compare multiple checkpoints:
-    python -m soft_equidiff.eval_success_rate \
-        --checkpoint outputs/run_a/policy_step0200000.pt,outputs/run_b/policy_step0200000.pt \
-        --labels "EquiDiff-exact,SoftEqui-step" \
-        --n_episodes 50 --device cuda
-
-    # Print generated actions + save a behaviour GIF:
-    python -m soft_equidiff.eval_success_rate \
-        --checkpoint outputs/run_a/policy_step0200000.pt \
-        --print_actions --gif_fps 15 --save_dir /tmp/evals
-
-    # Disable wandb:
-    python -m soft_equidiff.eval_success_rate --checkpoint ... --no_wandb
-
-Requires:
-    pip install gym_pusht gymnasium
-    pip install imageio          # for GIF export (optional)
 """
 
 import argparse

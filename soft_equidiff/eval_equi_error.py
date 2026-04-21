@@ -13,15 +13,6 @@ Two main functions:
    — Sweep over multiple denoising steps and plot the equivariance error curve.
    For SoftEqui-step, we expect the error to be larger at small k (near-clean)
    and smaller at large k (near-noisy).
-
-Usage:
-    python -m soft_equidiff.eval --checkpoint outputs/soft_step/policy_step0200000.pt \
-                                  --n_samples 200 --device cuda
-
-    # Compare multiple runs and log to the same wandb project:
-    python -m soft_equidiff.eval \\
-        --checkpoint outputs/soft_step/policy_step0200000.pt \\
-        --wandb_project soft-equidiff-pusht --wandb_run_name eval_comparison
 """
 
 import argparse

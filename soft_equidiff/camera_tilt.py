@@ -4,14 +4,6 @@ Camera tilt augmentation for the Push-T experiments.
 Applies a perspective warp to simulate a tilted overhead camera.
 A tilt of θ degrees shrinks the image horizontally by cos(θ),
 approximating the foreshortening from a non-perpendicular viewpoint.
-
-This intentionally breaks rotational symmetry of the scene,
-allowing us to test how well the soft-equivariant model degrades gracefully
-compared to the strictly equivariant baseline.
-
-Usage in dataset loading:
-    transform = make_tilt_transform(tilt_degrees=30)
-    dataset = LeRobotDataset(..., image_transforms=transform)
 """
 
 import math
